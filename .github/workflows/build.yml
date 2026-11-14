@@ -80,48 +80,37 @@ jobs:
 
       - name: Add the YT3-850 device tree (lxf-p5000)
         run: |
-          # The packaged kernel ships the 10-inch (p5100) device tree but not the
-          # 8-inch (p5000) one, so build it from the msm8916-mainline kernel source.
+          set -euo pipefail
+          # The packaged kernel (6.12) ships the 10-inch Yoga Tab 3 device tree
+          # (lxf-p5100) but not the 8-inch one (lxf-p5000). In the msm8916-mainline
+          # kernel both tablets share one hardware description and differ only in
+          # model/compatible, so derive the p5000 tree from the packaged p5100 one.
+          # That keeps it matched to the kernel that is actually in the image.
           sudo apt-get install -y -qq device-tree-compiler
-          PMAPORTS="$(pmbootstrap config aports | tail -1)"
-          KPKG="$(find "$PMAPORTS" -type d -name linux-postmarketos-qcom-msm8916 | head -1)"
-          echo "--- packaged kernel ---"
-          grep -E "^(pkgver|pkgrel|_tag|_commit|source)=" "$KPKG/APKBUILD" || true
-          grep -h -E "CONFIG_(TOUCHSCREEN_HIDEEP|BATTERY_BQ27XXX|WCN36XX|DRM_MSM|BACKLIGHT_PWM|PWM_|FB_SIMPLE|DRM_SIMPLEDRM|LEDS_SN3190|LEDS_IS31FL319X|AK8975)[A-Z0-9_]*=" "$KPKG"/config-*armv7* || true
-          TAG="$(sed -n 's/^_tag="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$KPKG/APKBUILD" | head -1)"
-          REF="${TAG:-wip/msm8916/7.0}"
-          echo "kernel source ref: $REF"
-          git clone -q --depth 1 --filter=blob:none --sparse --branch "$REF" https://github.com/msm8916-mainline/linux.git ksrc \
-            || git clone -q --depth 1 --filter=blob:none --sparse --branch wip/msm8916/7.0 https://github.com/msm8916-mainline/linux.git ksrc
-          cd ksrc
-          git sparse-checkout set arch/arm/boot/dts/qcom arch/arm64/boot/dts/qcom include/dt-bindings scripts/dtc/include-prefixes
-          git log -1 --format='%H %cd %s'
-          D=arch/arm/boot/dts/qcom
-          if [ ! -f $D/qcom-msm8909-lenovo-lxf-p5000.dts ]; then
-            echo "p5000 dts missing at $REF, taking it from wip/msm8916/7.0"
-            git fetch -q --depth 1 --filter=blob:none origin wip/msm8916/7.0
-            git checkout -q FETCH_HEAD
-            git log -1 --format='%H %cd %s'
-          fi
-          cpp -nostdinc -undef -D__DTS__ -x assembler-with-cpp \
-            -I include -I scripts/dtc/include-prefixes -I $D \
-            $D/qcom-msm8909-lenovo-lxf-p5000.dts \
-            | dtc -@ -I dts -O dtb -i $D -i scripts/dtc/include-prefixes -o ../qcom-msm8909-lenovo-lxf-p5000.dtb -
-          cd ..
-          ls -la qcom-msm8909-lenovo-lxf-p5000.dtb
-          fdtget qcom-msm8909-lenovo-lxf-p5000.dtb / model compatible
-
           LOOP="$(sudo losetup -f --show -P out/qcom-msm8909.img)"
           sudo fdisk -l "$LOOP"
           mkdir mnt
           sudo mount "${LOOP}p1" mnt
           echo "--- boot partition ---"
-          sudo find mnt -maxdepth 3 | head -60
+          sudo find mnt -maxdepth 2 | head -60
           sudo cat mnt/extlinux/extlinux.conf || true
           REFDTB="$(sudo find mnt -name 'qcom-msm8909-lenovo-lxf-p5100.dtb' | head -1)"
           test -n "$REFDTB"
-          sudo cp qcom-msm8909-lenovo-lxf-p5000.dtb "$(dirname "$REFDTB")/"
-          sudo ls -la "$(dirname "$REFDTB")" | grep -i lenovo
+          DTBDIR="$(dirname "$REFDTB")"
+          sudo cat "$REFDTB" > p5100.dtb
+          dtc -q -I dtb -O dts -o p5100.dts p5100.dtb
+          grep -n -E 'model = |compatible = "lenovo' p5100.dts
+          sed -e 's/model = "Lenovo Yoga Tab 3 10 LTE";/model = "Lenovo Yoga Tab 3 8";/' \
+              -e 's/compatible = "lenovo,lxf-p5100", "qcom,msm8909";/compatible = "lenovo,lxf-p5000", "qcom,msm8909";/' \
+              p5100.dts > p5000.dts
+          grep -q 'lenovo,lxf-p5000' p5000.dts
+          dtc -q -I dts -O dtb -o qcom-msm8909-lenovo-lxf-p5000.dtb p5000.dts
+          fdtget qcom-msm8909-lenovo-lxf-p5000.dtb / model
+          fdtget qcom-msm8909-lenovo-lxf-p5000.dtb / compatible
+          fdtget qcom-msm8909-lenovo-lxf-p5000.dtb /chosen/framebuffer@83200000 width
+          fdtget qcom-msm8909-lenovo-lxf-p5000.dtb /chosen/framebuffer@83200000 height
+          sudo cp qcom-msm8909-lenovo-lxf-p5000.dtb "$DTBDIR/"
+          sudo ls -la "$DTBDIR" | grep -i lenovo
           df -h mnt
           sudo umount mnt
           sudo losetup -d "$LOOP"
