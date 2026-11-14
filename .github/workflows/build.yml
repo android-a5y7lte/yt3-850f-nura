@@ -101,7 +101,7 @@ jobs:
           dtc -q -I dtb -O dts -o p5100.dts p5100.dtb
           grep -n -E 'model = |compatible = "lenovo' p5100.dts
           sed -e 's/model = "Lenovo Yoga Tab 3 10 LTE";/model = "Lenovo Yoga Tab 3 8";/' \
-              -e 's/compatible = "lenovo,lxf-p5100", "qcom,msm8909";/compatible = "lenovo,lxf-p5000", "qcom,msm8909";/' \
+              -e 's/lenovo,lxf-p5100/lenovo,lxf-p5000/' \
               p5100.dts > p5000.dts
           grep -q 'lenovo,lxf-p5000' p5000.dts
           dtc -q -I dts -O dtb -o qcom-msm8909-lenovo-lxf-p5000.dtb p5000.dts
@@ -109,8 +109,11 @@ jobs:
           fdtget qcom-msm8909-lenovo-lxf-p5000.dtb / compatible
           fdtget qcom-msm8909-lenovo-lxf-p5000.dtb /chosen/framebuffer@83200000 width
           fdtget qcom-msm8909-lenovo-lxf-p5000.dtb /chosen/framebuffer@83200000 height
-          sudo cp qcom-msm8909-lenovo-lxf-p5000.dtb "$DTBDIR/"
-          sudo ls -la "$DTBDIR" | grep -i lenovo
+          # extlinux.conf uses "fdtdir /", so the tree must sit next to every p5100 copy
+          sudo find mnt -name 'qcom-msm8909-lenovo-lxf-p5100.dtb' | while read -r f; do
+            sudo cp qcom-msm8909-lenovo-lxf-p5000.dtb "$(dirname "$f")/"
+          done
+          sudo find mnt -name '*lenovo-lxf*' -exec ls -la {} +
           df -h mnt
           sudo umount mnt
           sudo losetup -d "$LOOP"
