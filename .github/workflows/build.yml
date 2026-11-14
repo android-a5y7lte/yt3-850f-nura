@@ -1,0 +1,124 @@
+name: Build Nura edge (postmarketOS) for YT3-850F
+
+on:
+  workflow_dispatch:
+    inputs:
+      ui:
+        description: "Interface (phosh, sxmo-de-sway, xfce4)"
+        default: "phosh"
+      release:
+        description: "Publish a GitHub release with the images"
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths: [".github/workflows/build.yml"]
+
+permissions:
+  contents: write
+
+env:
+  DEVICE: qcom-msm8909
+  UI: ${{ github.event.inputs.ui || 'phosh' }}
+  PMOS_USER: user
+  PMOS_PASSWORD: "147147"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host setup
+        run: |
+          df -h /
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq git python3 openssl kpartx xz-utils zstd android-sdk-libsparse-utils
+          # Ubuntu 24.04 blocks unprivileged user namespaces, which newer pmbootstrap uses
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+
+      - name: Install pmbootstrap
+        run: |
+          git clone --depth 1 https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git ~/pmbootstrap
+          mkdir -p ~/.local/bin
+          ln -s ~/pmbootstrap/pmbootstrap.py ~/.local/bin/pmbootstrap
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          ~/.local/bin/pmbootstrap --version
+
+      - name: Configure
+        run: |
+          yes "" | pmbootstrap init || true
+          pmbootstrap config device "$DEVICE"
+          pmbootstrap config ui "$UI"
+          pmbootstrap config user "$PMOS_USER"
+          pmbootstrap config hostname yt3-850f
+          pmbootstrap config
+          echo "--- device package ---"
+          PMAPORTS="$(pmbootstrap config aports | tail -1)"
+          find "$PMAPORTS" -maxdepth 3 -type d -name "device-$DEVICE" -exec sh -c 'cat "$1/deviceinfo"; echo; cat "$1/APKBUILD"' _ {} \;
+
+      - name: Build image
+        run: |
+          pmbootstrap -y install --password "$PMOS_PASSWORD" --no-sparse
+
+      - name: Export
+        run: |
+          pmbootstrap export out-links
+          ls -la out-links/
+          mkdir out
+          for f in out-links/*; do
+            case "$f" in
+              *.img) cp -L "$f" out/ ;;
+            esac
+          done
+          ls -la out/
+          sha256sum out/* | tee out/SHA256SUMS.txt
+
+      - name: Fetch lk2nd for MSM8909
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir lk2nd
+          gh release download --repo msm8916-mainline/lk2nd --pattern '*msm8909*' --dir lk2nd || true
+          gh release view --repo msm8916-mainline/lk2nd --json tagName,assets --jq '.tagName, (.assets[].name)' || true
+          ls -la lk2nd/
+
+      - name: Compress
+        run: |
+          cd out
+          for f in *.img; do
+            ls -la "$f"
+            xz -T0 -3 "$f"
+          done
+          cp ../lk2nd/* . 2>/dev/null || true
+          ls -la
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nura-edge-yt3-850f-${{ env.UI }}
+          path: out/
+          compression-level: 0
+
+      - name: Upload pmbootstrap log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pmbootstrap-log
+          path: |
+            ~/.local/var/pmbootstrap/log.txt
+          if-no-files-found: ignore
+
+      - name: Show log tail on failure
+        if: failure()
+        run: tail -n 200 ~/.local/var/pmbootstrap/log.txt || true
+
+      - name: Publish release
+        if: github.event.inputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="nura-edge-$(date +%Y%m%d-%H%M)-${UI}"
+          gh release create "$TAG" out/* --title "Nura edge for YT3-850F ($UI)" --notes "Untested build. See README for flashing steps."
