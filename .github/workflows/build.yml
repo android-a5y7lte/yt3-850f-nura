@@ -120,6 +120,36 @@ jobs:
           cp qcom-msm8909-lenovo-lxf-p5000.dtb out/
           sha256sum out/* | tee out/SHA256SUMS.txt
 
+      - name: Default to landscape orientation
+        run: |
+          set -euo pipefail
+          # The YT3-850F panel is natively portrait (800x1280) but the tablet is
+          # designed to be used in landscape, kickstand at the bottom. Rotate the
+          # phoc output by 90 degrees so the home screen lands in landscape.
+          LOOP="$(sudo losetup -f --show -P out/qcom-msm8909.img)"
+          mkdir -p mnt2
+          # the rootfs is on partition 2
+          sudo mount "${LOOP}p2" mnt2
+          sudo find mnt2 -maxdepth 2 -name "phoc.ini" -o -name "phoc.d" | head
+          sudo mkdir -p mnt2/etc/phosh/phoc.ini.d
+          sudo tee mnt2/etc/phosh/phoc.ini.d/10-landscape.ini >/dev/null <<INI
+          # Rotate the display 90 degrees so the kickstand sits at the bottom.
+          # Change to 270 if the image ends up upside-down after first boot.
+          [output:DSI-1]
+          rotate = 90
+          INI
+          # Older phoc reads only /etc/phosh/phoc.ini, so also drop it there
+          # if the config dir isn't picked up by this version.
+          if [ ! -f mnt2/etc/phosh/phoc.ini ]; then
+            sudo tee mnt2/etc/phosh/phoc.ini >/dev/null <<INI
+          [output:DSI-1]
+          rotate = 90
+          INI
+          fi
+          sudo cat mnt2/etc/phosh/phoc.ini.d/10-landscape.ini
+          sudo umount mnt2
+          sudo losetup -d "$LOOP"
+
       - name: Fetch lk2nd for MSM8909
         env:
           GH_TOKEN: ${{ github.token }}
