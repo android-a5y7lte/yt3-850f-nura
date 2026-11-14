@@ -67,6 +67,9 @@ jobs:
         run: |
           pmbootstrap export out-links
           ls -la out-links/
+          echo "--- device trees for this tablet ---"
+          ls out-links/dtbs/ | grep -i -E "lenovo|lxf" || echo "NO LENOVO DTB FOUND"
+          ls out-links/dtbs/ | wc -l
           mkdir out
           for f in out-links/*; do
             case "$f" in
@@ -84,6 +87,12 @@ jobs:
           gh release download --repo msm8916-mainline/lk2nd --pattern '*msm8909*' --dir lk2nd || true
           gh release view --repo msm8916-mainline/lk2nd --json tagName,assets --jq '.tagName, (.assets[].name)' || true
           ls -la lk2nd/
+          echo "--- does this lk2nd release know the tablet? ---"
+          TAG="$(gh release view --repo msm8916-mainline/lk2nd --json tagName --jq .tagName)"
+          git clone -q --depth 1 --branch "$TAG" https://github.com/msm8916-mainline/lk2nd.git lk2nd-src
+          grep -rn -i "lxf-p5000" lk2nd-src/lk2nd/device/dts/msm8909/ || echo "lk2nd release $TAG has NO lxf-p5000 entry"
+          grep -n -i -B3 -A25 "lxf-p5000 {" lk2nd-src/lk2nd/device/dts/msm8909/apq8009-1gb-qrd-skue.dts || true
+          strings lk2nd/lk2nd-msm8909.img | grep -i "lxf" || echo "no lxf string in lk2nd image"
 
       - name: Compress
         run: |
