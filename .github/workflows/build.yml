@@ -77,6 +77,55 @@ jobs:
             esac
           done
           ls -la out/
+
+      - name: Add the YT3-850 device tree (lxf-p5000)
+        run: |
+          # The packaged kernel ships the 10-inch (p5100) device tree but not the
+          # 8-inch (p5000) one, so build it from the msm8916-mainline kernel source.
+          sudo apt-get install -y -qq device-tree-compiler
+          PMAPORTS="$(pmbootstrap config aports | tail -1)"
+          KPKG="$(find "$PMAPORTS" -type d -name linux-postmarketos-qcom-msm8916 | head -1)"
+          echo "--- packaged kernel ---"
+          grep -E "^(pkgver|pkgrel|_tag|_commit|source)=" "$KPKG/APKBUILD" || true
+          grep -h -E "CONFIG_(TOUCHSCREEN_HIDEEP|BATTERY_BQ27XXX|WCN36XX|DRM_MSM|BACKLIGHT_PWM|PWM_|FB_SIMPLE|DRM_SIMPLEDRM|LEDS_SN3190|LEDS_IS31FL319X|AK8975)[A-Z0-9_]*=" "$KPKG"/config-*armv7* || true
+          TAG="$(sed -n 's/^_tag="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$KPKG/APKBUILD" | head -1)"
+          REF="${TAG:-wip/msm8916/7.0}"
+          echo "kernel source ref: $REF"
+          git clone -q --depth 1 --filter=blob:none --sparse --branch "$REF" https://github.com/msm8916-mainline/linux.git ksrc \
+            || git clone -q --depth 1 --filter=blob:none --sparse --branch wip/msm8916/7.0 https://github.com/msm8916-mainline/linux.git ksrc
+          cd ksrc
+          git sparse-checkout set arch/arm/boot/dts/qcom arch/arm64/boot/dts/qcom include/dt-bindings scripts/dtc/include-prefixes
+          git log -1 --format='%H %cd %s'
+          D=arch/arm/boot/dts/qcom
+          if [ ! -f $D/qcom-msm8909-lenovo-lxf-p5000.dts ]; then
+            echo "p5000 dts missing at $REF, taking it from wip/msm8916/7.0"
+            git fetch -q --depth 1 --filter=blob:none origin wip/msm8916/7.0
+            git checkout -q FETCH_HEAD
+            git log -1 --format='%H %cd %s'
+          fi
+          cpp -nostdinc -undef -D__DTS__ -x assembler-with-cpp \
+            -I include -I scripts/dtc/include-prefixes -I $D \
+            $D/qcom-msm8909-lenovo-lxf-p5000.dts \
+            | dtc -@ -I dts -O dtb -i $D -i scripts/dtc/include-prefixes -o ../qcom-msm8909-lenovo-lxf-p5000.dtb -
+          cd ..
+          ls -la qcom-msm8909-lenovo-lxf-p5000.dtb
+          fdtget qcom-msm8909-lenovo-lxf-p5000.dtb / model compatible
+
+          LOOP="$(sudo losetup -f --show -P out/qcom-msm8909.img)"
+          sudo fdisk -l "$LOOP"
+          mkdir mnt
+          sudo mount "${LOOP}p1" mnt
+          echo "--- boot partition ---"
+          sudo find mnt -maxdepth 3 | head -60
+          sudo cat mnt/extlinux/extlinux.conf || true
+          REFDTB="$(sudo find mnt -name 'qcom-msm8909-lenovo-lxf-p5100.dtb' | head -1)"
+          test -n "$REFDTB"
+          sudo cp qcom-msm8909-lenovo-lxf-p5000.dtb "$(dirname "$REFDTB")/"
+          sudo ls -la "$(dirname "$REFDTB")" | grep -i lenovo
+          df -h mnt
+          sudo umount mnt
+          sudo losetup -d "$LOOP"
+          cp qcom-msm8909-lenovo-lxf-p5000.dtb out/
           sha256sum out/* | tee out/SHA256SUMS.txt
 
       - name: Fetch lk2nd for MSM8909
@@ -97,10 +146,8 @@ jobs:
       - name: Compress
         run: |
           cd out
-          for f in *.img; do
-            ls -la "$f"
-            xz -T0 -3 "$f"
-          done
+          ls -la qcom-msm8909.img
+          xz -T0 -3 qcom-msm8909.img
           cp ../lk2nd/* . 2>/dev/null || true
           ls -la
 
