@@ -6,6 +6,9 @@ on:
       ui:
         description: "Interface (phosh, sxmo-de-sway, xfce4)"
         default: "phosh"
+      device:
+        description: "pmOS device package (qcom-msm8909 or lenovo-lxf-p5100)"
+        default: "lenovo-lxf-p5100"
       release:
         description: "Publish a GitHub release with the images"
         type: boolean
@@ -18,7 +21,7 @@ permissions:
   contents: write
 
 env:
-  DEVICE: qcom-msm8909
+  DEVICE: ${{ github.event.inputs.device || 'lenovo-lxf-p5100' }}
   UI: ${{ github.event.inputs.ui || 'phosh' }}
   PMOS_USER: user
   PMOS_PASSWORD: "147147"
@@ -73,12 +76,13 @@ jobs:
           mkdir out
           for f in out-links/*; do
             case "$f" in
-              *.img) cp -L "$f" out/ ;;
+              *.img) cp -L "$f" "out/${DEVICE}.img" ;;
             esac
           done
           ls -la out/
 
       - name: Add the YT3-850 device tree (lxf-p5000)
+        if: env.DEVICE == 'qcom-msm8909'
         run: |
           set -euo pipefail
           # The packaged kernel (6.12) ships the 10-inch Yoga Tab 3 device tree
@@ -126,8 +130,16 @@ jobs:
           # The YT3-850F panel is natively portrait (800x1280) but the tablet is
           # designed to be used in landscape, kickstand at the bottom. Rotate the
           # phoc output by 90 degrees so the home screen lands in landscape.
-          LOOP="$(sudo losetup -f --show -P out/qcom-msm8909.img)"
-          mkdir -p mnt2
+          LOOP="$(sudo losetup -f --show -P out/${DEVICE}.img)"
+          sudo mkdir -p mnt1
+          sudo mount "${LOOP}p1" mnt1
+          if [ -f mnt1/extlinux/extlinux.conf ]; then
+            sudo sed -i 's|^menu title .*|menu title Nura Edge, Linux 6.12.1|' mnt1/extlinux/extlinux.conf
+            echo "--- updated extlinux.conf ---"
+            sudo cat mnt1/extlinux/extlinux.conf
+          fi
+          sudo umount mnt1
+          sudo mkdir -p mnt2
           # the rootfs is on partition 2
           sudo mount "${LOOP}p2" mnt2
           sudo find mnt2 -maxdepth 2 -name "phoc.ini" -o -name "phoc.d" | head
@@ -168,8 +180,10 @@ jobs:
       - name: Compress
         run: |
           cd out
-          ls -la qcom-msm8909.img
-          xz -T0 -3 qcom-msm8909.img
+          for f in *.img; do
+            ls -la "$f"
+            xz -T0 -3 "$f"
+          done
           cp ../lk2nd/* . 2>/dev/null || true
           ls -la
 
