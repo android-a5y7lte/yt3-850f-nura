@@ -57,6 +57,7 @@ jobs:
           pmbootstrap config ui "$UI"
           pmbootstrap config user "$PMOS_USER"
           pmbootstrap config hostname yt3-850f
+          pmbootstrap config extra_packages "device-${DEVICE}-nonfree-firmware,networkmanager,openssh-server"
           pmbootstrap config
           echo "--- device package ---"
           PMAPORTS="$(pmbootstrap config aports | tail -1)"
