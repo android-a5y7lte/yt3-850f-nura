@@ -1,0 +1,27 @@
+name: Inspect phoc/wlroots rotation path
+on:
+  workflow_dispatch:
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Fetch phoc 0.59.0
+        run: |
+          curl -fsSL -o phoc.tar.xz https://sources.phosh.mobi/releases/phoc/phoc-0.59.0.tar.xz
+          tar xf phoc.tar.xz
+          cd phoc-0.59.0
+          ls subprojects/
+          W=$(ls -d subprojects/wlroots-0.20* | head -1); echo "WLR=$W"
+          mkdir -p ../dump
+          cp -r $W/render/pixman ../dump/pixman
+          cp $W/types/output/render.c ../dump/output_render.c 2>/dev/null || true
+          cp $W/types/scene/wlr_scene.c ../dump/wlr_scene.c 2>/dev/null || true
+          cp $W/render/swapchain.c ../dump/ 2>/dev/null || true
+          cp $W/types/output/output.c ../dump/output.c 2>/dev/null || true
+          grep -rln "transform" src | head -40 > ../dump/phoc_transform_files.txt
+          for f in src/render.c src/output.c src/renderer.c src/server.c; do [ -f $f ] && cp $f ../dump/phoc_$(basename $f); done
+          ls -la ../dump
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phoc-src-dump
+          path: dump/
