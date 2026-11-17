@@ -31,6 +31,18 @@ def backlight():
     return devs[0] if devs else None
 
 
+def set_governor(name):
+    """Full CPU speed only while the screen is on: yt3-cpu-perf pins
+    "performance" for touch responsiveness, which wastes battery when the
+    screen is off (USB from a PC can't keep up with it)."""
+    for g in glob.glob("/sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_governor"):
+        try:
+            with open(g, "w") as f:
+                f.write(name + "\n")
+        except OSError:
+            pass
+
+
 class Backlight:
     def __init__(self, path):
         self.path = path
@@ -49,15 +61,18 @@ class Backlight:
             cur = self._read("brightness")
             self.saved = cur if cur > 0 else self._read("max_brightness")
             self._write(0)
+            set_governor("schedutil")
             log("screen off (PowerSaveMode=%d): backlight 0, will restore %d" % (mode, self.saved))
         elif mode == 0 and self.saved is not None:
             self._write(self.saved)
+            set_governor("performance")
             log("screen on: backlight %d" % self.saved)
             self.saved = None
 
     def restore(self):
         if self.saved is not None:
             self._write(self.saved)
+            set_governor("performance")
             self.saved = None
 
 

@@ -175,6 +175,19 @@ jobs:
           MODS="out/${DEVICE}-mods.img"
           cp -L "$STABLE" "$MODS"
           LOOP="$(sudo losetup -f --show -P "$MODS")"
+          # The packaged device tree leaves four of the six BLSP I2C buses
+          # disabled, among them the ones with the SMB358 charger (0x57) and
+          # the bq27500 fuel gauge (0x55). Switch them on in every boot DTB.
+          sudo apt-get install -y -qq device-tree-compiler
+          sudo mkdir -p mnt_boot
+          sudo mount "${LOOP}p1" mnt_boot
+          sudo find mnt_boot -name 'qcom-msm8909-lenovo-lxf-p*.dtb' | while read -r dtb; do
+            for b in 78b6000 78b7000 78b8000 78ba000; do
+              sudo fdtput -t s "$dtb" /soc@0/i2c@$b status okay
+            done
+            echo "$dtb: $(for b in 78b5000 78b6000 78b7000 78b8000 78b9000 78ba000; do printf '%s=%s ' $b "$(fdtget "$dtb" /soc@0/i2c@$b status)"; done)"
+          done
+          sudo umount mnt_boot
           sudo mkdir -p mnt_mods
           sudo mount "${LOOP}p2" mnt_mods
           echo "--- overlay: common ---"
