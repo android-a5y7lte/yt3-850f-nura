@@ -1,0 +1,17 @@
+src/debug-control.c
+src/utils.c
+src/utils.h
+src/output.c
+src/view-deco.c
+src/settings.c
+src/spinner.c
+src/anim/property-easer.c
+src/phosh-thumbnail.c
+src/render.c
+src/touch-point.c
+src/settings.h
+src/outputs-states.c
+src/workspace-indicator.c
+src/output.h
+src/color-rect.c
+src/phoc.ini.example
