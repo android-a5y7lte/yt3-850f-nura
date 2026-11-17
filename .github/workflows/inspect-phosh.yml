@@ -1,0 +1,26 @@
+name: Inspect phosh lockscreen sources
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Fetch phosh 0.59.0 and phrog, push sources to branch phosh-src
+        run: |
+          set -eux
+          curl -fsSL -o phosh.tar.xz https://sources.phosh.mobi/releases/phosh/phosh-0.59.0.tar.xz
+          tar xf phosh.tar.xz
+          mkdir dump
+          cd phosh-0.59.0
+          grep -rln -iE "keypad|unlock|auth" src | sort > ../dump/phosh-files.txt
+          tar czf ../dump/phosh-src.tgz src/lockscreen* src/keypad* src/auth* src/lockscreen-manager* src/ui/lockscreen* src/ui/keypad* data/mobi.phosh.shell.gschema.xml 2>/dev/null || tar czf ../dump/phosh-src.tgz src data/*.gschema.xml
+          cd ..
+          git clone -q --depth 1 https://github.com/samcday/phrog.git phrog || true
+          [ -d phrog ] && tar czf dump/phrog-src.tgz --exclude=.git phrog || true
+          cd dump
+          git init -q -b phosh-src
+          git config user.name ci; git config user.email ci@localhost
+          git add -A; git commit -qm "phosh 0.59.0 lockscreen sources + phrog"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" phosh-src
