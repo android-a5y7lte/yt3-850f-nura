@@ -1,6 +1,8 @@
 name: Inspect phoc/wlroots rotation path
 on:
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   inspect:
     runs-on: ubuntu-24.04
@@ -13,7 +15,7 @@ jobs:
           ls subprojects/
           W=$(ls -d subprojects/wlroots-0.20* | head -1); echo "WLR=$W"
           mkdir -p ../dump
-          cp -r $W/render/pixman ../dump/pixman
+          cp -r $W/render/pixman ../dump/pixman; cp -r $W/render/allocator ../dump/allocator 2>/dev/null || true; cp $W/backend/drm/drm.c ../dump/drm.c 2>/dev/null || true; cp $W/types/output/state.c ../dump/output_state.c 2>/dev/null || true; tar czf ../dump/phoc-src-tree.tgz src subprojects/wlroots-0.20*/render subprojects/wlroots-0.20*/types/output subprojects/wlroots-0.20*/types/scene subprojects/wlroots-0.20*/backend/drm subprojects/wlroots-0.20*/include
           cp $W/types/output/render.c ../dump/output_render.c 2>/dev/null || true
           cp $W/types/scene/wlr_scene.c ../dump/wlr_scene.c 2>/dev/null || true
           cp $W/render/swapchain.c ../dump/ 2>/dev/null || true
@@ -21,7 +23,10 @@ jobs:
           grep -rln "transform" src | head -40 > ../dump/phoc_transform_files.txt
           for f in src/render.c src/output.c src/renderer.c src/server.c; do [ -f $f ] && cp $f ../dump/phoc_$(basename $f); done
           ls -la ../dump
-      - uses: actions/upload-artifact@v4
-        with:
-          name: phoc-src-dump
-          path: dump/
+      - name: Push dump to branch phoc-src
+        run: |
+          cd dump
+          git init -q -b phoc-src
+          git config user.name ci; git config user.email ci@localhost
+          git add -A; git commit -qm "phoc 0.59.0 / wlroots 0.20 render sources"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" phoc-src
