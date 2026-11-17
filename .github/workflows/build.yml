@@ -197,6 +197,12 @@ jobs:
             sudo ln -sf /etc/systemd/system/$svc \
                 mnt_mods/etc/systemd/system/multi-user.target.wants/$svc
           done
+          # NetworkManager requires its system-connections to be 0600 root:root
+          for nm in mnt_mods/etc/NetworkManager/system-connections/*.nmconnection; do
+            [ -f "$nm" ] || continue
+            sudo chown 0:0 "$nm"
+            sudo chmod 600 "$nm"
+          done
           # Prefer the YT3-850F UCM when the sound card appears, by making it the
           # default UCM search path. The card's name comes from the DT (sound
           # "model = yt3-850f"), so alsa-ucm2 will pick pmos/yt3-850f/yt3-850f.conf.
