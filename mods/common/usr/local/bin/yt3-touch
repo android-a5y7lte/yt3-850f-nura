@@ -31,7 +31,7 @@ MAX_X, MAX_Y, MAX_TOUCH = 800, 1280, 10
 #   rotate=0|90|180|270  fixed
 #   fallback=90        used with auto while the compositor can't be asked
 # 90 = tablet turned counter-clockwise from portrait (Lenovo logo on the right),
-# which is what phoc's "rotate = 90" / transform 90 shows on this tablet.
+# which is what phoc's "rotate = 90" shows on this tablet (wlr-randr: 270).
 #
 # The virtual touchscreen always advertises a fixed 1280x800 range. The
 # compositor scales the device's range onto the screen, so we report each
@@ -66,7 +66,10 @@ CONF = read_conf()
 FOLLOW = CONF["rotate"] == "auto"
 ROTATE = _as_rotation(CONF["fallback"] if FOLLOW else CONF["rotate"])
 
-_TRANSFORMS = {"normal": 0, "90": 90, "180": 180, "270": 270}
+# wlr-randr reports the output transform, which counts the turn the opposite
+# way from our convention: measured on the tablet, the landscape that needs
+# our rotate=90 is reported by phoc as "Transform: 270".
+_TRANSFORMS = {"normal": 0, "90": 270, "180": 180, "270": 90}
 
 
 def compositor_rotation():
