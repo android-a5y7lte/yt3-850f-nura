@@ -1,0 +1,64 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * YT3-850F GPU bring-up (EXPERIMENTAL).
+ *
+ * The msm8916-mainline 6.12 tree has no GPU node for MSM8909. The GPU block
+ * on MSM8909 is at the same SoC bus addresses as on MSM8916 (both in the
+ * 0x1c00000 range), so we derive a node from the MSM8916 GPU bring-up and
+ * use MSM8909's own clock bindings.
+ *
+ * Differences from MSM8916 that this file encodes:
+ *   - MSM8909 has GCC_OXILI_AHB_CLK, GCC_OXILI_GFX3D_CLK, GCC_BIMC_GFX_CLK,
+ *     GCC_BIMC_GPU_CLK, GCC_SMMU_CFG_CLK, GCC_GFX_TBU_CLK, OXILI_GDSC.
+ *   - MSM8909 does NOT have GCC_OXILI_GMEM_CLK (GMEM is smaller / not wired).
+ *   - MSM8909 does NOT have GCC_GFX_TCU_CLK (the TCU is shared with APSS).
+ *   - Chip is Adreno 304 (a3xx family, smallest sibling of a305/a306).
+ *
+ * Known failure modes to look for after flashing:
+ *   - `dmesg | grep -i adreno` showing a clock lookup failure => wrong clock ID
+ *   - `dmesg | grep -i iommu` showing SMMU probe failure => drop gpu_iommu
+ *     node and let the generic iommu driver handle it (or remove iommus
+ *     property from gpu@ so the GPU runs without SMMU translation)
+ *   - Kernel hang during boot => GPU power domain name wrong; comment it out
+ */
+
+#include <dt-bindings/clock/qcom,gcc-msm8909.h>
+
+&soc {
+	gpu_opp_table: opp-table-gpu {
+		compatible = "operating-points-v2";
+
+		/* MSM8909's GFX3D clock comes out of GPLL2 at 400 MHz. Two
+		 * safe OPPs: nominal and low. Adding more is possible once
+		 * the GPU is confirmed to probe. */
+		opp-200000000 {
+			opp-hz = /bits/ 64 <200000000>;
+		};
+
+		opp-400000000 {
+			opp-hz = /bits/ 64 <400000000>;
+		};
+	};
+
+	gpu: gpu@1c00000 {
+		compatible = "qcom,adreno-304.0", "qcom,adreno";
+		reg = <0x01c00000 0x20000>;
+		reg-names = "kgsl_3d0_reg_memory";
+
+		interrupts = <GIC_SPI 33 IRQ_TYPE_LEVEL_HIGH>;
+		interrupt-names = "kgsl_3d0_irq";
+
+		clock-names = "core", "iface", "mem_iface", "alt_mem_iface", "gfx3d";
+		clocks = <&gcc GCC_OXILI_GFX3D_CLK>,
+			 <&gcc GCC_OXILI_AHB_CLK>,
+			 <&gcc GCC_BIMC_GFX_CLK>,
+			 <&gcc GCC_BIMC_GPU_CLK>,
+			 <&gcc GFX3D_CLK_SRC>;
+
+		power-domains = <&gcc OXILI_GDSC>;
+		operating-points-v2 = <&gpu_opp_table>;
+
+		#cooling-cells = <2>;
+		status = "okay";
+	};
+};

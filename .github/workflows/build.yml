@@ -17,6 +17,10 @@ on:
         description: "Also build a second image with mods/ overlay (touch, USB, audio UCM)"
         type: boolean
         default: true
+      gpu_experiment:
+        description: "Also build a third image with the experimental Adreno 304 GPU DT patch"
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths: [".github/workflows/build.yml"]
@@ -203,6 +207,48 @@ jobs:
           sudo umount mnt_mods
           sudo losetup -d "$LOOP"
           sha256sum "$MODS" | tee -a out/SHA256SUMS.txt
+
+      - name: Build gpu-experiment image (Adreno 304 DT patch)
+        if: github.event.inputs.gpu_experiment == 'true'
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -qq device-tree-compiler
+          STABLE="out/${DEVICE}.img"
+          GPU_IMG="out/${DEVICE}-gpu.img"
+          cp -L "$STABLE" "$GPU_IMG"
+
+          # Build the patched DTB. If this fails, we abort before touching the image.
+          KERNEL_SRC=/tmp/kernel-src \
+            bash mods/dt/apply-dt-patch.sh mods/dt/yt3-gpu.dtsi /tmp/lxf-p5000-gpu.dtb
+          fdtget /tmp/lxf-p5000-gpu.dtb / model
+          fdtget /tmp/lxf-p5000-gpu.dtb / compatible
+          fdtget /tmp/lxf-p5000-gpu.dtb /soc/gpu@1c00000 compatible
+          echo "patched DTB OK"
+
+          LOOP="$(sudo losetup -f --show -P "$GPU_IMG")"
+          sudo mkdir -p mnt_gpu
+          sudo mount "${LOOP}p1" mnt_gpu
+          # Replace every lxf-p5000/p5100 dtb in /boot with the patched one.
+          sudo find mnt_gpu -name 'qcom-msm8909-lenovo-lxf-p*.dtb' | while read -r f; do
+            sudo cp /tmp/lxf-p5000-gpu.dtb "$f"
+          done
+          sudo find mnt_gpu -name '*lenovo-lxf*' -exec ls -la {} +
+          sudo umount mnt_gpu
+          # Also drop the mods overlay on top: touch driver, USB, UCM.
+          sudo mount "${LOOP}p2" mnt_gpu
+          sudo cp -av mods/common/. mnt_gpu/
+          sudo cp -av mods/audio/. mnt_gpu/
+          sudo chmod +x mnt_gpu/usr/local/bin/yt3-touch \
+                        mnt_gpu/usr/local/bin/yt3-usb-gadget \
+                        mnt_gpu/usr/local/bin/yt3-audio-diag
+          sudo mkdir -p mnt_gpu/etc/systemd/system/multi-user.target.wants
+          for svc in yt3-touch.service yt3-usb-gadget.service yt3-dnsmasq-usb.service; do
+            sudo ln -sf /etc/systemd/system/$svc \
+                mnt_gpu/etc/systemd/system/multi-user.target.wants/$svc
+          done
+          sudo umount mnt_gpu
+          sudo losetup -d "$LOOP"
+          sha256sum "$GPU_IMG" | tee -a out/SHA256SUMS.txt
 
       - name: Fetch lk2nd for MSM8909
         env:
