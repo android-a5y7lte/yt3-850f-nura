@@ -20,6 +20,44 @@ import time
 ADDR = 0x6C
 GPIO_POWER, GPIO_RESET, GPIO_INT = 92, 12, 13
 MAX_X, MAX_Y, MAX_TOUCH = 800, 1280, 10
+
+# The panel (and the touch chip) are natively portrait, 800x1280. When the
+# compositor rotates the picture, the touch coordinates must be rotated too.
+# phoc only does that for outputs it recognises as built-in panels (DSI-/eDP-/
+# LVDS-/DPI-), and simpledrm's output is "Unknown-1", so we rotate here and
+# present a touchscreen that already has the shape of the rotated screen.
+# /etc/yt3-touch.conf: rotate=0|90|180|270, matching "rotate =" in phoc.ini.
+# 90 = tablet turned counter-clockwise from portrait (Lenovo logo on the right),
+# which is what phoc's "rotate = 90" shows on this tablet.
+def read_rotation(path="/etc/yt3-touch.conf"):
+    try:
+        with open(path) as f:
+            for line in f:
+                k, _, v = line.partition("=")
+                if k.strip() == "rotate":
+                    r = int(v.strip())
+                    if r in (0, 90, 180, 270):
+                        return r
+    except (OSError, ValueError):
+        pass
+    return 0
+
+ROTATE = read_rotation()
+
+
+def rotate_point(x, y):
+    """Map a raw portrait point (0..MAX_X-1, 0..MAX_Y-1) to screen space."""
+    if ROTATE == 90:
+        return y, (MAX_X - 1) - x
+    if ROTATE == 180:
+        return (MAX_X - 1) - x, (MAX_Y - 1) - y
+    if ROTATE == 270:
+        return (MAX_Y - 1) - y, x
+    return x, y
+
+
+def screen_size():
+    return (MAX_Y, MAX_X) if ROTATE in (90, 270) else (MAX_X, MAX_Y)
 REG_COUNT, REG_EVENTS, EVENT_SIZE = 0x0240, 0x0242, 10
 FLAG_UP = 0x10
 
@@ -201,7 +239,8 @@ def parse_events(raw):
         # in between real taps (seen as a 5 ms TRACKING_ID flicker at corner).
         if not up and x == 0 and y == 0 and z <= 1:
             continue
-        out.append((idx, min(x, MAX_X - 1), min(y, MAX_Y - 1), z, w, up))
+        sx, sy = rotate_point(min(x, MAX_X - 1), min(y, MAX_Y - 1))
+        out.append((idx, sx, sy, z, w, up))
     return out
 
 
@@ -224,9 +263,10 @@ class TouchDevice:
         for ev in (EV_SYN, EV_KEY, EV_ABS): fcntl.ioctl(self.fd, UI_SET_EVBIT, ev)
         fcntl.ioctl(self.fd, UI_SET_KEYBIT, BTN_TOUCH)
         fcntl.ioctl(self.fd, UI_SET_PROPBIT, INPUT_PROP_DIRECT)
-        for code, lo, hi, res in ((ABS_X, 0, MAX_X - 1, 7), (ABS_Y, 0, MAX_Y - 1, 7),
+        sw, sh = screen_size()
+        for code, lo, hi, res in ((ABS_X, 0, sw - 1, 7), (ABS_Y, 0, sh - 1, 7),
                                    (ABS_MT_SLOT, 0, MAX_TOUCH - 1, 0), (ABS_MT_TRACKING_ID, 0, 65535, 0),
-                                   (ABS_MT_POSITION_X, 0, MAX_X - 1, 7), (ABS_MT_POSITION_Y, 0, MAX_Y - 1, 7),
+                                   (ABS_MT_POSITION_X, 0, sw - 1, 7), (ABS_MT_POSITION_Y, 0, sh - 1, 7),
                                    (ABS_MT_TOUCH_MAJOR, 0, 255, 0), (ABS_MT_PRESSURE, 0, 65535, 0)):
             fcntl.ioctl(self.fd, UI_SET_ABSBIT, code)
             fcntl.ioctl(self.fd, UI_ABS_SETUP, struct.pack("H2x6i", code, 0, lo, hi, 0, 0, res))
@@ -325,7 +365,7 @@ def cmd_run():
     try: chip.read(REG_COUNT, 2)
     except OSError as e: raise SystemExit("ERROR: touch chip does not answer (%s)" % e)
     dev = TouchDevice()
-    log("Touchscreen running.")
+    log("Touchscreen running (rotate=%d, %dx%d)." % ((ROTATE,) + screen_size()))
     try:
         for f in frames(chip):
             if f: dev.report(f)
