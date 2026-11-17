@@ -1,0 +1,11 @@
+[Unit]
+Description=YT3-850F: turn the backlight off when Phosh blanks the screen
+After=multi-user.target
+
+[Service]
+ExecStart=/usr/local/bin/yt3-blank
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

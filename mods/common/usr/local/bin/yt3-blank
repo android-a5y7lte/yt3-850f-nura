@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+"""Turn the YT3-850F backlight off when Phosh blanks the screen.
+
+The panel is driven by simpledrm, which can't switch the display off, so when
+Phosh's idle timeout asks for "screen off" the picture just stays lit. Phosh
+(and the phrog greeter) publish the requested state as the PowerSaveMode
+property of org.gnome.Mutter.DisplayConfig on the session bus: 0 = on,
+1/2/3 = standby/suspend/off. Follow the newest graphical session's bus and
+mirror that state onto /sys/class/backlight.
+"""
+import glob
+import os
+import re
+import select
+import signal
+import subprocess
+import sys
+import time
+
+DEST = "org.gnome.Mutter.DisplayConfig"
+PATH = "/org/gnome/Mutter/DisplayConfig"
+MODE_RE = re.compile(r"'PowerSaveMode':\s*<(\d+)>")
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+def backlight():
+    devs = sorted(glob.glob("/sys/class/backlight/*"))
+    return devs[0] if devs else None
+
+
+class Backlight:
+    def __init__(self, path):
+        self.path = path
+        self.saved = None  # brightness to restore, set while dark
+
+    def _read(self, name):
+        with open(os.path.join(self.path, name)) as f:
+            return int(f.read().strip())
+
+    def _write(self, value):
+        with open(os.path.join(self.path, "brightness"), "w") as f:
+            f.write("%d\n" % value)
+
+    def apply(self, mode):
+        if mode != 0 and self.saved is None:
+            cur = self._read("brightness")
+            self.saved = cur if cur > 0 else self._read("max_brightness")
+            self._write(0)
+            log("screen off (PowerSaveMode=%d): backlight 0, will restore %d" % (mode, self.saved))
+        elif mode == 0 and self.saved is not None:
+            self._write(self.saved)
+            log("screen on: backlight %d" % self.saved)
+            self.saved = None
+
+    def restore(self):
+        if self.saved is not None:
+            self._write(self.saved)
+            self.saved = None
+
+
+def newest_session():
+    """uid of the newest Wayland session (greeter or user)."""
+    best = None
+    for sock in glob.glob("/run/user/*/wayland-[0-9]"):
+        try:
+            st = os.stat(sock)
+        except OSError:
+            continue
+        if best is None or st.st_mtime > best[0]:
+            best = (st.st_mtime, st.st_uid, st.st_gid)
+    return best[1:] if best else None
+
+
+def as_user(uid, gid):
+    def drop():
+        os.setgid(gid)
+        os.setuid(uid)
+    return drop
+
+
+def bus_args(uid):
+    return ["--address", "unix:path=/run/user/%d/bus" % uid]
+
+
+def current_mode(uid, gid):
+    try:
+        out = subprocess.run(
+            ["gdbus", "call"] + bus_args(uid) + ["--dest", DEST, "--object-path", PATH,
+             "--method", "org.freedesktop.DBus.Properties.Get", DEST, "PowerSaveMode"],
+            capture_output=True, text=True, timeout=5, preexec_fn=as_user(uid, gid)).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.search(r"<(\d+)>", out)
+    return int(m.group(1)) if m else None
+
+
+def main():
+    path = backlight()
+    if path is None:
+        sys.exit("no backlight device under /sys/class/backlight")
+    bl = Backlight(path)
+
+    def stop(*_):
+        bl.restore()
+        sys.exit(0)
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    log("using %s" % path)
+
+    while True:
+        sess = newest_session()
+        if sess is None:
+            time.sleep(2)
+            continue
+        uid, gid = sess
+        mode = current_mode(uid, gid)
+        if mode is None:  # session's shell not up yet
+            time.sleep(2)
+            continue
+        log("following session of uid %d (PowerSaveMode=%d)" % (uid, mode))
+        bl.apply(mode)
+        proc = subprocess.Popen(
+            ["gdbus", "monitor"] + bus_args(uid) + ["--dest", DEST, "--object-path", PATH],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+            preexec_fn=as_user(uid, gid))
+        try:
+            while True:
+                r, _, _ = select.select([proc.stdout], [], [], 2.0)
+                if r:
+                    line = proc.stdout.readline()
+                    if not line:
+                        break  # monitor exited (session ended)
+                    m = MODE_RE.search(line)
+                    if m:
+                        bl.apply(int(m.group(1)))
+                elif newest_session() != sess:
+                    break  # login/logout switched sessions
+        finally:
+            proc.kill()
+            proc.wait()
+        bl.restore()  # never leave the screen dark across a session change
+        time.sleep(1)
+
+
+if __name__ == "__main__":
+    main()
