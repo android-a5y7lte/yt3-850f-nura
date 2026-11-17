@@ -1,0 +1,130 @@
+--- a/subprojects/wlroots-0.20.x/render/pixman/pass.c
++++ b/subprojects/wlroots-0.20.x/render/pixman/pass.c
+@@ -1,4 +1,6 @@
+ #include <assert.h>
++#include <stdbool.h>
++#include <stdint.h>
+ #include <stdlib.h>
+ #include "render/pixman.h"
+ 
+@@ -36,6 +38,34 @@
+ 	abort();
+ }
+ 
++/*
++ * Scratch buffer for the two-step rotated blend below. The compositor is
++ * single-threaded and renders one pass at a time, so a single buffer that
++ * only grows is enough and avoids a large malloc/page-fault per draw.
++ */
++static uint32_t *rot_scratch;
++static size_t rot_scratch_size;
++
++static pixman_image_t *get_rot_scratch(int width, int height) {
++	size_t need = (size_t)width * (size_t)height * 4;
++	if (need > rot_scratch_size) {
++		uint32_t *data = realloc(rot_scratch, need);
++		if (data == NULL) {
++			return NULL;
++		}
++		rot_scratch = data;
++		rot_scratch_size = need;
++	}
++	return pixman_image_create_bits(PIXMAN_a8r8g8b8, width, height,
++		rot_scratch, width * 4);
++}
++
++static bool is_exact_rotation(enum wl_output_transform transform) {
++	return transform == WL_OUTPUT_TRANSFORM_90 ||
++		transform == WL_OUTPUT_TRANSFORM_180 ||
++		transform == WL_OUTPUT_TRANSFORM_270;
++}
++
+ static void render_pass_add_texture(struct wlr_render_pass *wlr_pass,
+ 		const struct wlr_render_texture_options *options) {
+ 	struct wlr_pixman_render_pass *pass = get_render_pass(wlr_pass);
+@@ -157,7 +187,22 @@
+ 
+ 		pixman_image_set_transform(texture->image, &transform);
+ 
+-		switch (options->filter_mode) {
++		// A pure 90/180/270 degree turn without scaling maps every destination
++		// pixel exactly onto a source pixel, so bilinear filtering gives the
++		// same result as nearest -- but bilinear sends pixman down its slow
++		// generic path, while nearest lets it use the dedicated rotation
++		// blitters. On CPU-only devices with a rotated panel this is the
++		// difference between a responsive and an unusable desktop.
++		bool exact_rotation = is_exact_rotation(options->transform) &&
++			src_box_transformed.width == dst_box.width &&
++			src_box_transformed.height == dst_box.height;
++
++		enum wlr_scale_filter_mode filter_mode = options->filter_mode;
++		if (exact_rotation) {
++			filter_mode = WLR_SCALE_FILTER_NEAREST;
++		}
++
++		switch (filter_mode) {
+ 		case WLR_SCALE_FILTER_BILINEAR:
+ 			pixman_image_set_repeat(texture->image, PIXMAN_REPEAT_PAD);
+ 			pixman_image_set_filter(texture->image, PIXMAN_FILTER_BILINEAR, NULL, 0);
+@@ -172,12 +217,55 @@
+ 		// width,height part of source crop is done here by the width and height we pass:
+ 		// because of the scaling, cropping at the end by dst_box.{width,height} is
+ 		// equivalent to if we cropped at the start by src_box.{width,height}.
+-		pixman_image_composite32(op, texture->image, mask, buffer->image,
+-			0, 0, // source x,y
+-			0, 0, // mask x,y
+-			dst_box.x, dst_box.y, // dest x,y
+-			dst_box.width, dst_box.height // composite width,height
+-		);
++		bool blended = false;
++		if (exact_rotation && op == PIXMAN_OP_OVER && mask == NULL &&
++				PIXMAN_FORMAT_A(pixman_image_get_format(texture->image)) != 0) {
++			// pixman's fast rotation blitters only exist for the SRC operator.
++			// Rotate just the area that will actually be drawn (the damage
++			// clip intersected with the destination box) into a scratch
++			// buffer with SRC, then blend that untransformed with OVER, which
++			// pixman runs with its SIMD (NEON on ARM) fast paths.
++			pixman_box32_t ext = {
++				.x1 = dst_box.x,
++				.y1 = dst_box.y,
++				.x2 = dst_box.x + dst_box.width,
++				.y2 = dst_box.y + dst_box.height,
++			};
++			if (options->clip != NULL) {
++				const pixman_box32_t *clip = pixman_region32_extents(options->clip);
++				if (clip->x1 > ext.x1) ext.x1 = clip->x1;
++				if (clip->y1 > ext.y1) ext.y1 = clip->y1;
++				if (clip->x2 < ext.x2) ext.x2 = clip->x2;
++				if (clip->y2 < ext.y2) ext.y2 = clip->y2;
++			}
++			int width = ext.x2 - ext.x1;
++			int height = ext.y2 - ext.y1;
++			if (width <= 0 || height <= 0) {
++				blended = true; // nothing visible to draw
++			} else {
++				pixman_image_t *scratch = get_rot_scratch(width, height);
++				if (scratch != NULL) {
++					pixman_image_composite32(PIXMAN_OP_SRC, texture->image, NULL, scratch,
++						ext.x1 - dst_box.x, ext.y1 - dst_box.y, // source x,y
++						0, 0, // mask x,y
++						0, 0, // dest x,y
++						width, height);
++					pixman_image_composite32(PIXMAN_OP_OVER, scratch, NULL, buffer->image,
++						0, 0, 0, 0, ext.x1, ext.y1, width, height);
++					pixman_image_unref(scratch);
++					blended = true;
++				}
++			}
++		}
++
++		if (!blended) {
++			pixman_image_composite32(op, texture->image, mask, buffer->image,
++				0, 0, // source x,y
++				0, 0, // mask x,y
++				dst_box.x, dst_box.y, // dest x,y
++				dst_box.width, dst_box.height // composite width,height
++			);
++		}
+ 
+ 		pixman_image_set_transform(texture->image, NULL);
+ 	} else {

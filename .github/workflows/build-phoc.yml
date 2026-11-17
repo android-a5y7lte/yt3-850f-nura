@@ -1,0 +1,108 @@
+name: Build patched phoc (fast pixman rotation)
+
+# phoc embeds wlroots. On MSM8909 there is no GPU driver, so phoc renders
+# with wlroots' pixman (CPU) renderer, and with the panel rotated to landscape
+# every draw went through pixman's slow bilinear transform path. The patch in
+# mods/phoc/ uses nearest filtering for exact 90/180/270 turns (lossless) and
+# routes blended surfaces through pixman's fast rotation blitter + NEON OVER.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  DEVICE: lenovo-lxf-p5100
+  UI: phosh
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host setup
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq git python3 openssl xz-utils zstd
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+
+      - name: Install pmbootstrap
+        run: |
+          git clone --depth 1 https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git ~/pmbootstrap
+          mkdir -p ~/.local/bin
+          ln -s ~/pmbootstrap/pmbootstrap.py ~/.local/bin/pmbootstrap
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Configure
+        run: |
+          yes "" | pmbootstrap init || true
+          pmbootstrap config device "$DEVICE"
+          pmbootstrap config ui "$UI"
+
+      - name: Prepare patched phoc aport
+        run: |
+          set -euxo pipefail
+          git clone -q --depth 1 --filter=blob:none --sparse https://github.com/alpinelinux/aports.git aports
+          (cd aports && git sparse-checkout set community/phoc)
+          PMAPORTS="$(pmbootstrap config aports | tail -1)"
+          DEST="$PMAPORTS/temp/phoc"
+          rm -rf "$DEST"; mkdir -p "$DEST"
+          cp -r aports/community/phoc/. "$DEST/"
+          cp mods/phoc/0100-pixman-fast-exact-rotation.patch "$DEST/"
+          cd "$DEST"
+          grep -E '^pkgver=' APKBUILD
+          # Stay ahead of the archive's phoc so apk won't swap ours back.
+          sed -i 's/^pkgrel=.*/pkgrel=100/' APKBUILD
+          # LTO under emulation is very slow and buys little here.
+          sed -i 's/-Db_lto=true/-Db_lto=false/' APKBUILD
+          python3 - <<'PY'
+          import re
+          p = "APKBUILD"
+          s = open(p).read()
+          m = re.search(r'^source="([^"]*)"', s, re.M)
+          assert m, "no source= line"
+          new = 'source="' + m.group(1).rstrip() + '\n\t0100-pixman-fast-exact-rotation.patch\n\t"'
+          s = s[:m.start()] + new + s[m.end():]
+          open(p, "w").write(s)
+          PY
+          grep -n -A3 '^source=' APKBUILD
+          pmbootstrap checksum phoc
+
+      - name: Check the patch applies to this phoc release
+        run: |
+          set -euxo pipefail
+          PMAPORTS="$(pmbootstrap config aports | tail -1)"
+          VER="$(sed -n 's/^pkgver=//p' "$PMAPORTS/temp/phoc/APKBUILD")"
+          curl -fsSL -o /tmp/phoc.tar.xz "https://sources.phosh.mobi/releases/phoc/phoc-${VER}.tar.xz"
+          mkdir -p /tmp/phocsrc && tar xf /tmp/phoc.tar.xz -C /tmp/phocsrc
+          cd /tmp/phocsrc/phoc-${VER}
+          patch -p1 --dry-run < "$GITHUB_WORKSPACE/mods/phoc/0100-pixman-fast-exact-rotation.patch"
+
+      - name: Build phoc for armv7
+        run: |
+          pmbootstrap -y build --arch armv7 --force phoc
+
+      - name: Collect package
+        run: |
+          set -eux
+          mkdir -p out
+          find ~/.local/var/pmbootstrap/packages -name 'phoc-[0-9]*-r100.apk' -path '*armv7*' -exec cp {} out/ \;
+          ls -la out/
+          test -n "$(ls out/*.apk)"
+          sha256sum out/*.apk | tee out/SHA256SUMS.txt
+
+      - name: Show log tail on failure
+        if: failure()
+        run: tail -n 250 ~/.local/var/pmbootstrap/log.txt || true
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="phoc-fastrot-$(date +%Y%m%d-%H%M)"
+          gh release create "$TAG" out/* --title "phoc with fast pixman rotation (armv7)" \
+            --notes "Install on the tablet: sudo apk add --allow-untrusted phoc-*-r100.apk && sudo systemctl restart greetd"
