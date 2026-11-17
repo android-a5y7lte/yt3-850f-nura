@@ -1,0 +1,9 @@
+[terminal]
+vt = 7
+
+# No GPU driver on MSM8909: without these, phoc and GTK fall back to Mesa's
+# software OpenGL (llvmpipe), which costs ~1 s of CPU per tap on a Cortex-A7.
+# pixman/cairo are plain CPU renderers and are several times cheaper.
+[default_session]
+command = "env WLR_RENDERER=pixman GSK_RENDERER=cairo /usr/libexec/phrog-greetd-session"
+user = "greetd"
