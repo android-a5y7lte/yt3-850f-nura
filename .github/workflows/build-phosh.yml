@@ -84,15 +84,18 @@ jobs:
           grep -n "prepare()\|default_prepare" APKBUILD || echo "(no custom prepare: abuild's default applies *.patch)"
           pmbootstrap checksum phosh
 
-      - name: Check the patch applies to this phosh release
+      - name: Show the aport and make sure our patch is applied
         run: |
           set -euxo pipefail
           DEST="$(cat /tmp/phosh-aport)"
-          VER="$(sed -n 's/^pkgver=//p' "$DEST/APKBUILD")"
-          curl -fsSL -o /tmp/phosh.tar.xz "https://sources.phosh.mobi/releases/phosh/phosh-${VER}.tar.xz"
-          mkdir -p /tmp/phoshsrc && tar xf /tmp/phosh.tar.xz -C /tmp/phoshsrc
-          cd /tmp/phoshsrc/phosh-${VER}
-          patch -p1 --dry-run < "$GITHUB_WORKSPACE/mods/phosh/0100-pin-length-fallback-file.patch"
+          cat "$DEST/APKBUILD"
+          # abuild's default_prepare applies the *.patch files from source=.
+          # A custom prepare() that doesn't call it would silently skip ours.
+          if ! grep -q 'default_prepare' "$DEST/APKBUILD"; then
+            sed -i 's/^prepare() {$/prepare() {\n\tdefault_prepare/' "$DEST/APKBUILD"
+          fi
+          sed -n '/^prepare() {/,/^}/p' "$DEST/APKBUILD"
+          grep -q 'default_prepare' "$DEST/APKBUILD"
 
       - name: Build phosh for armv7
         run: |
