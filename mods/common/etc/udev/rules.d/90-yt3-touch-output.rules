@@ -1,0 +1,8 @@
+# phoc only maps a touchscreen to (and rotates it with) a display it considers
+# built in, and it decides that by connector name: DSI-, eDP-, LVDS-, DPI-.
+# On this kernel the panel is driven by simpledrm, whose connector is
+# "Unknown-1", so without this the touch input is left unmapped and does not
+# follow the display rotation (landscape taps land in the wrong place; the
+# lower half of the PIN pad appears dead). WL_OUTPUT is read by libinput and
+# handed to the compositor as the device's output.
+ACTION=="add|change", SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="HiDeep IST700 touchscreen (yt3-touch)", ENV{WL_OUTPUT}="Unknown-1"
