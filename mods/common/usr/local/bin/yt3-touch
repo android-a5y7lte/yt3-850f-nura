@@ -250,9 +250,27 @@ class TouchDevice:
 
 
 def frames(chip, until=None):
+    """Yield touch frames.
+
+    Quick taps on this chip are tricky: the count register can go 0 -> 1 -> 0
+    inside 5 ms, and if we only poll on edge events we can land on count=0
+    with no event ever read. We therefore poll count aggressively for a short
+    window after each edge, so a quick finger press-release still enqueues at
+    least one down event.
+    """
     had = False
+    hot_until = 0.0
+    IDLE_WAIT = 0.04        # how long to block for an edge when nothing's up
+    HOT_POLL = 0.004        # poll interval while "hot" (recent activity)
+    HOT_WINDOW = 0.2        # stay hot for this long after each edge/touch
     while until is None or time.monotonic() < until:
-        if chip.edge: chip.irq.wait(0.08)
+        now = time.monotonic()
+        if had or now < hot_until:
+            if chip.edge: chip.irq.wait(HOT_POLL)
+            else: time.sleep(HOT_POLL)
+        elif chip.edge:
+            if chip.irq.wait(IDLE_WAIT):
+                hot_until = time.monotonic() + HOT_WINDOW
         elif chip.irq is not None:
             if chip.irq.get() != 0: time.sleep(0.01); continue
         else: time.sleep(0.015)
@@ -267,6 +285,7 @@ def frames(chip, until=None):
         f = parse_events(raw)
         if f:
             yield f
+            hot_until = time.monotonic() + HOT_WINDOW
             if any(not up for _, _, _, _, _, up in f): had = True
 
 
