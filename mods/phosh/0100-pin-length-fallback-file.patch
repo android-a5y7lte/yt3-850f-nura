@@ -1,0 +1,87 @@
+--- a/src/lockscreen.c
++++ b/src/lockscreen.c
+@@ -1246,6 +1246,26 @@
+ }
+ 
+ 
++
++/*
++ * Fallback PIN length for accounts that aren't managed by systemd-homed
++ * (e.g. postmarketOS/Alpine users in /etc/passwd): the length can be put in
++ * /etc/phosh/pin-length so the PIN is submitted as soon as it is complete,
++ * without pressing "Unlock".
++ */
++static int
++read_fallback_pin_length (void)
++{
++  g_autofree char *contents = NULL;
++  gint64 len;
++
++  if (!g_file_get_contents ("/etc/phosh/pin-length", &contents, NULL, NULL))
++    return 0;
++
++  len = g_ascii_strtoll (g_strstrip (contents), NULL, 10);
++  return (len > 0 && len <= 64) ? (int) len : 0;
++}
++
+ static void
+ phosh_lockscreen_init (PhoshLockscreen *self)
+ {
+@@ -1256,6 +1276,10 @@
+   /* LTR doesn't work for the deck
+    * https://gitlab.gnome.org/World/Phosh/phosh/-/issues/1132 */
+   gtk_widget_set_direction (GTK_WIDGET (priv->deck), GTK_TEXT_DIR_LTR);
++
++  /* Used by lockscreens that don't get the length from PhoshUserManager,
++   * e.g. the phrog greeter. */
++  set_pin_length (self, read_fallback_pin_length ());
+ }
+ 
+ 
+--- a/src/user-manager.c
++++ b/src/user-manager.c
+@@ -50,6 +50,26 @@
+ G_DEFINE_TYPE (PhoshUserManager, phosh_user_manager, G_TYPE_OBJECT)
+ 
+ 
++/*
++ * Fallback PIN length for accounts that aren't managed by systemd-homed
++ * (e.g. postmarketOS/Alpine users in /etc/passwd): the length can be put in
++ * /etc/phosh/pin-length so the PIN is submitted as soon as it is complete,
++ * without pressing "Unlock".
++ */
++static int
++read_fallback_pin_length (void)
++{
++  g_autofree char *contents = NULL;
++  gint64 len;
++
++  if (!g_file_get_contents ("/etc/phosh/pin-length", &contents, NULL, NULL))
++    return 0;
++
++  len = g_ascii_strtoll (g_strstrip (contents), NULL, 10);
++  return (len > 0 && len <= 64) ? (int) len : 0;
++}
++
++
+ static void
+ on_user_record_ready (GObject *source_object, GAsyncResult *res, gpointer user_data)
+ {
+@@ -125,6 +145,9 @@
+   }
+ 
+  out:
++  if (length == 0)
++    length = read_fallback_pin_length ();
++
+   if (self->pin_length != length) {
+     self->pin_length = length;
+     g_object_notify_by_pspec (G_OBJECT (self), props[PROP_PIN_LENGTH]);
+@@ -319,6 +342,7 @@
+ phosh_user_manager_init (PhoshUserManager *self)
+ {
+   self->cancel = g_cancellable_new ();
++  self->pin_length = read_fallback_pin_length ();
+ }
+ 
+ 
