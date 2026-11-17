@@ -11,12 +11,12 @@ OUT_DTB="$2"          # output DTB file
 KERNEL_REF="${KERNEL_REF:-wip/msm8916/7.0}"
 
 if [ ! -d "$KERNEL_SRC/.git" ]; then
-    git clone -q --depth 1 --filter=blob:none --sparse \
-        --branch "$KERNEL_REF" \
+    # Full shallow clone -- about 350 MB, but reliable. Sparse-checkout kept
+    # emptying subdirectories (`include/dt-bindings/input/` showed as a dir
+    # entry but had no files under it), breaking the cpp pass. Not worth
+    # the fight on CI.
+    git clone -q --depth 1 --branch "$KERNEL_REF" \
         https://github.com/msm8916-mainline/linux.git "$KERNEL_SRC"
-    # cone mode recursively includes every file under each listed path
-    git -C "$KERNEL_SRC" sparse-checkout set --cone \
-        arch/arm/boot/dts/qcom include/dt-bindings scripts/dtc/include-prefixes
 fi
 
 if [ ! -f "$KERNEL_SRC/arch/arm/boot/dts/qcom/qcom-msm8909-lenovo-lxf-p5x00.dtsi" ]; then
