@@ -240,6 +240,17 @@ jobs:
               if [ -d fixmnt/home/user ]; then
                 sudo chown -R 10000:10000 fixmnt/home/user
               fi
+              # NetworkManager silently ignores any .nmconnection file that is
+              # not mode 0600 root:root. The mods step chmods them but the gpu
+              # step didn't, and a cp -av from the git checkout preserves 0644
+              # and runner uid. Nail them here regardless of which image.
+              if [ -d fixmnt/etc/NetworkManager/system-connections ]; then
+                for nm in fixmnt/etc/NetworkManager/system-connections/*.nmconnection; do
+                  [ -f "$nm" ] || continue
+                  sudo chown 0:0 "$nm"
+                  sudo chmod 600 "$nm"
+                done
+              fi
               echo "--- p${P} after ---"
               sudo ls -ld fixmnt
               sudo ls -la fixmnt | head -15
