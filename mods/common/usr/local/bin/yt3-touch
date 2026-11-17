@@ -22,42 +22,104 @@ GPIO_POWER, GPIO_RESET, GPIO_INT = 92, 12, 13
 MAX_X, MAX_Y, MAX_TOUCH = 800, 1280, 10
 
 # The panel (and the touch chip) are natively portrait, 800x1280. When the
-# compositor rotates the picture, the touch coordinates must be rotated too.
-# phoc only does that for outputs it recognises as built-in panels (DSI-/eDP-/
-# LVDS-/DPI-), and simpledrm's output is "Unknown-1", so we rotate here and
-# present a touchscreen that already has the shape of the rotated screen.
-# /etc/yt3-touch.conf: rotate=0|90|180|270, matching "rotate =" in phoc.ini.
+# compositor rotates the picture, touch coordinates must be rotated too. phoc
+# only does that for outputs it recognises as built-in panels (DSI-/eDP-/LVDS-/
+# DPI-); simpledrm's output is "Unknown-1", so we rotate here.
+#
+# /etc/yt3-touch.conf:
+#   rotate=auto        follow the compositor (asks phoc via wlr-randr), default
+#   rotate=0|90|180|270  fixed
+#   fallback=90        used with auto while the compositor can't be asked
 # 90 = tablet turned counter-clockwise from portrait (Lenovo logo on the right),
-# which is what phoc's "rotate = 90" shows on this tablet.
-def read_rotation(path="/etc/yt3-touch.conf"):
+# which is what phoc's "rotate = 90" / transform 90 shows on this tablet.
+#
+# The virtual touchscreen always advertises a fixed 1280x800 range. The
+# compositor scales the device's range onto the screen, so we report each
+# point as a fraction of the *current* screen and the size of the advertised
+# range doesn't matter -- that lets the rotation change without recreating
+# the input device.
+DEV_W, DEV_H = 1280, 800
+
+
+def read_conf(path="/etc/yt3-touch.conf"):
+    conf = {"rotate": "auto", "fallback": "90"}
     try:
         with open(path) as f:
             for line in f:
                 k, _, v = line.partition("=")
-                if k.strip() == "rotate":
-                    r = int(v.strip())
-                    if r in (0, 90, 180, 270):
-                        return r
-    except (OSError, ValueError):
+                if k.strip() in conf and v.strip():
+                    conf[k.strip()] = v.strip()
+    except OSError:
         pass
-    return 0
+    return conf
 
-ROTATE = read_rotation()
+
+def _as_rotation(value, default=0):
+    try:
+        r = int(value)
+        return r if r in (0, 90, 180, 270) else default
+    except ValueError:
+        return default
+
+
+CONF = read_conf()
+FOLLOW = CONF["rotate"] == "auto"
+ROTATE = _as_rotation(CONF["fallback"] if FOLLOW else CONF["rotate"])
+
+_TRANSFORMS = {"normal": 0, "90": 90, "180": 180, "270": 270}
+
+
+def compositor_rotation():
+    """Ask the running compositor (newest Wayland session first) how the panel
+    is turned. Returns 0/90/180/270, or None if it can't be determined."""
+    socks = []
+    for sock in glob.glob("/run/user/*/wayland-[0-9]"):
+        try:
+            socks.append((os.stat(sock).st_mtime, sock))
+        except OSError:
+            pass
+    for _, sock in sorted(socks, reverse=True):
+        env = dict(os.environ, XDG_RUNTIME_DIR=os.path.dirname(sock),
+                   WAYLAND_DISPLAY=os.path.basename(sock))
+        try:
+            out = subprocess.run(["wlr-randr"], env=env, capture_output=True,
+                                 text=True, timeout=3).stdout
+        except (OSError, subprocess.SubprocessError):
+            return None  # wlr-randr missing or hung
+        for line in out.splitlines():
+            k, _, v = line.strip().partition(":")
+            if k == "Transform" and v.strip() in _TRANSFORMS:
+                return _TRANSFORMS[v.strip()]
+    return None
+
+
+def follow_compositor(interval=1.5):
+    global ROTATE
+    while True:
+        r = compositor_rotation()
+        if r is not None and r != ROTATE:
+            log("  screen rotation is now %d" % r)
+            ROTATE = r
+        time.sleep(interval)
 
 
 def rotate_point(x, y):
-    """Map a raw portrait point (0..MAX_X-1, 0..MAX_Y-1) to screen space."""
+    """Map a raw portrait point to the advertised DEV_W x DEV_H range,
+    as the same fraction of the screen in its current orientation."""
+    fx, fy = x / (MAX_X - 1), y / (MAX_Y - 1)
     if ROTATE == 90:
-        return y, (MAX_X - 1) - x
-    if ROTATE == 180:
-        return (MAX_X - 1) - x, (MAX_Y - 1) - y
-    if ROTATE == 270:
-        return (MAX_Y - 1) - y, x
-    return x, y
+        fx, fy = fy, 1.0 - fx
+    elif ROTATE == 180:
+        fx, fy = 1.0 - fx, 1.0 - fy
+    elif ROTATE == 270:
+        fx, fy = 1.0 - fy, fx
+    return int(round(fx * (DEV_W - 1))), int(round(fy * (DEV_H - 1)))
 
 
 def screen_size():
-    return (MAX_Y, MAX_X) if ROTATE in (90, 270) else (MAX_X, MAX_Y)
+    return DEV_W, DEV_H
+
+
 REG_COUNT, REG_EVENTS, EVENT_SIZE = 0x0240, 0x0242, 10
 FLAG_UP = 0x10
 
@@ -365,7 +427,10 @@ def cmd_run():
     try: chip.read(REG_COUNT, 2)
     except OSError as e: raise SystemExit("ERROR: touch chip does not answer (%s)" % e)
     dev = TouchDevice()
-    log("Touchscreen running (rotate=%d, %dx%d)." % ((ROTATE,) + screen_size()))
+    if FOLLOW:
+        import threading
+        threading.Thread(target=follow_compositor, daemon=True).start()
+    log("Touchscreen running (rotate=%s, now %d)." % ("auto" if FOLLOW else ROTATE, ROTATE))
     try:
         for f in frames(chip):
             if f: dev.report(f)
