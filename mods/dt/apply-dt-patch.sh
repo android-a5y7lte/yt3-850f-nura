@@ -6,14 +6,28 @@ set -euo pipefail
 KERNEL_SRC="${KERNEL_SRC:-/tmp/kernel}"
 PATCH_DTSI="$1"       # e.g. mods/dt/yt3-gpu.dtsi
 OUT_DTB="$2"          # output DTB file
-KERNEL_TAG="${KERNEL_TAG:-v6.12.1-msm8916}"
+# The "v6.12.1-msm8916" tag has been unreachable on the remote; use the
+# branch it was cut from. All DT nodes we need are stable on this branch.
+KERNEL_REF="${KERNEL_REF:-wip/msm8916/7.0}"
 
 if [ ! -d "$KERNEL_SRC/.git" ]; then
     git clone -q --depth 1 --filter=blob:none --sparse \
-        --branch "$KERNEL_TAG" \
+        --branch "$KERNEL_REF" \
         https://github.com/msm8916-mainline/linux.git "$KERNEL_SRC"
-    git -C "$KERNEL_SRC" sparse-checkout set \
+    # cone mode recursively includes every file under each listed path
+    git -C "$KERNEL_SRC" sparse-checkout set --cone \
         arch/arm/boot/dts/qcom include/dt-bindings scripts/dtc/include-prefixes
+fi
+
+if [ ! -f "$KERNEL_SRC/arch/arm/boot/dts/qcom/qcom-msm8909-lenovo-lxf-p5x00.dtsi" ]; then
+    echo "FATAL: p5x00.dtsi missing from $KERNEL_SRC on ref $KERNEL_REF" >&2
+    ls "$KERNEL_SRC/arch/arm/boot/dts/qcom" | grep -i -E "msm8909|lenovo|lxf" | head >&2
+    exit 1
+fi
+if [ ! -f "$KERNEL_SRC/include/dt-bindings/input/linux-event-codes.h" ]; then
+    echo "FATAL: input dt-bindings missing after sparse-checkout" >&2
+    ls "$KERNEL_SRC/include/dt-bindings/" >&2
+    exit 1
 fi
 
 # Make sure the p5000 DTS exists (the 6.12 branch only has p5100).
