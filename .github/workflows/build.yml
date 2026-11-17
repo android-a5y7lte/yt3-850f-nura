@@ -210,6 +210,45 @@ jobs:
           sudo losetup -d "$LOOP"
           sha256sum "$MODS" | tee -a out/SHA256SUMS.txt
 
+      - name: Fix image ownership (chown 1001 -> root, chmod / 755)
+        run: |
+          set -euo pipefail
+          # The pmbootstrap user-namespace install maps "root inside the chroot"
+          # to the runner's uid (1001) when writing to the loop-mounted ext4,
+          # so files on the image come out owned by uid 1001 instead of uid 0.
+          # On the device uid 1001 doesn't exist (real root is uid 0, user is
+          # uid 10000) and sudo refuses to start ("/etc must be owned by root"),
+          # which also wedges su and apk. Also some builds leave / with 555
+          # permissions (read-only for everyone), which stops anything from
+          # modifying the rootfs. Find every file whose owner is still 1001
+          # and chown it to root; retarget /home/user to the device's user uid
+          # if it was swept up; set / to 755.
+          for IMG in out/${DEVICE}.img out/${DEVICE}-mods.img out/${DEVICE}-gpu.img; do
+            [ -f "$IMG" ] || continue
+            echo "=== Fixing $IMG ==="
+            LOOP="$(sudo losetup -f --show -P "$IMG")"
+            sudo mkdir -p fixmnt
+            for P in 1 2; do
+              sudo mount "${LOOP}p${P}" fixmnt
+              echo "--- p${P} before: root dir + a few samples ---"
+              sudo ls -ld fixmnt
+              sudo find fixmnt -maxdepth 2 -uid 1001 | head -5 || true
+              sudo find fixmnt -uid 1001  -exec chown 0 {} + 2>/dev/null || true
+              sudo find fixmnt -gid 1001  -exec chgrp 0 {} + 2>/dev/null || true
+              sudo chmod 755 fixmnt
+              # Re-own /home/user to the device's user uid (10000) if present
+              if [ -d fixmnt/home/user ]; then
+                sudo chown -R 10000:10000 fixmnt/home/user
+              fi
+              echo "--- p${P} after ---"
+              sudo ls -ld fixmnt
+              sudo ls -la fixmnt | head -15
+              sudo umount fixmnt
+            done
+            sudo losetup -d "$LOOP"
+            sha256sum "$IMG" | tee -a out/SHA256SUMS.txt
+          done
+
       - name: Fetch lk2nd for MSM8909
         env:
           GH_TOKEN: ${{ github.token }}
