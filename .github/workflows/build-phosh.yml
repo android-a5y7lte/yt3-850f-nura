@@ -46,15 +46,24 @@ jobs:
       - name: Prepare patched phosh aport
         run: |
           set -euxo pipefail
-          git clone -q --depth 1 --filter=blob:none --sparse https://github.com/alpinelinux/aports.git aports
-          (cd aports && git sparse-checkout set community/phosh)
           PMAPORTS="$(pmbootstrap config aports | tail -1)"
-          DEST="$PMAPORTS/temp/phosh"
-          rm -rf "$DEST"; mkdir -p "$DEST"
-          cp -r aports/community/phosh/. "$DEST/"
+          # postmarketOS's systemd flavour carries its own phosh aport
+          # (extra-repos/systemd), and that is what the image installs. Patch
+          # that one in place; fall back to Alpine's community/phosh otherwise.
+          DEST="$(find "$PMAPORTS" -path '*/phosh/APKBUILD' -not -path '*/temp/*' | head -1 | xargs -r dirname)"
+          if [ -z "$DEST" ]; then
+            git clone -q --depth 1 --filter=blob:none --sparse https://github.com/alpinelinux/aports.git aports
+            (cd aports && git sparse-checkout set community/phosh)
+            DEST="$PMAPORTS/temp/phosh"
+            rm -rf "$DEST"; mkdir -p "$DEST"
+            cp -r aports/community/phosh/. "$DEST/"
+          fi
+          rm -rf "$PMAPORTS/temp/phosh"  # make sure only one phosh aport exists
+          [ -d "$DEST" ] || { echo "no phosh aport"; exit 1; }
+          echo "Using aport: $DEST"; echo "$DEST" > /tmp/phosh-aport
           cp mods/phosh/0100-pin-length-fallback-file.patch "$DEST/"
           cd "$DEST"
-          grep -E '^pkgver=' APKBUILD
+          grep -E '^(pkgver|pkgrel)=' APKBUILD
           # Stay ahead of the archive's phosh so apk won't swap ours back.
           sed -i 's/^pkgrel=.*/pkgrel=100/' APKBUILD
           # LTO under emulation is very slow and buys little here.
@@ -71,17 +80,18 @@ jobs:
           s = s[:m.start()] + new + s[m.end():]
           open(p, "w").write(s)
           PY
-          grep -n -A3 '^source=' APKBUILD
+          grep -n -A6 '^source=' APKBUILD
+          grep -n "prepare()\|default_prepare" APKBUILD || echo "(no custom prepare: abuild's default applies *.patch)"
           pmbootstrap checksum phosh
 
       - name: Check the patch applies to this phosh release
         run: |
           set -euxo pipefail
-          PMAPORTS="$(pmbootstrap config aports | tail -1)"
-          VER="$(sed -n 's/^pkgver=//p' "$PMAPORTS/temp/phosh/APKBUILD")"
-          curl -fsSL -o /tmp/phoc.tar.xz "https://sources.phosh.mobi/releases/phosh/phosh-${VER}.tar.xz"
-          mkdir -p /tmp/phocsrc && tar xf /tmp/phoc.tar.xz -C /tmp/phocsrc
-          cd /tmp/phocsrc/phosh-${VER}
+          DEST="$(cat /tmp/phosh-aport)"
+          VER="$(sed -n 's/^pkgver=//p' "$DEST/APKBUILD")"
+          curl -fsSL -o /tmp/phosh.tar.xz "https://sources.phosh.mobi/releases/phosh/phosh-${VER}.tar.xz"
+          mkdir -p /tmp/phoshsrc && tar xf /tmp/phosh.tar.xz -C /tmp/phoshsrc
+          cd /tmp/phoshsrc/phosh-${VER}
           patch -p1 --dry-run < "$GITHUB_WORKSPACE/mods/phosh/0100-pin-length-fallback-file.patch"
 
       - name: Build phosh for armv7
