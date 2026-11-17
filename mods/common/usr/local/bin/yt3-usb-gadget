@@ -1,0 +1,58 @@
+#!/bin/sh
+# Set up a USB CDC/ECM ethernet gadget for SSH-over-USB.
+# The Lenovo YT3-850F's mainline device tree pins the USB port in peripheral
+# mode but the kernel does not attach any gadget automatically, so we build
+# one here with configfs. On the PC side, a new usb0 / enx... interface
+# appears and `ssh user@172.16.42.1` reaches the tablet.
+set -eu
+G=/sys/kernel/config/usb_gadget/yt3
+UDC=$(ls /sys/class/udc 2>/dev/null | head -1 || true)
+
+start() {
+    [ -n "$UDC" ] || { echo "no UDC in /sys/class/udc; USB controller not available"; exit 0; }
+    modprobe libcomposite 2>/dev/null || true
+    if [ ! -d /sys/kernel/config/usb_gadget ]; then
+        mountpoint -q /sys/kernel/config || mount -t configfs none /sys/kernel/config
+    fi
+    [ -d "$G" ] && return 0
+    mkdir -p "$G"
+    cd "$G"
+    printf '0x1d6b\n' > idVendor                       # Linux Foundation
+    printf '0x0104\n' > idProduct                      # Multifunction Composite Gadget
+    printf '0x0100\n' > bcdDevice
+    printf '0x0200\n' > bcdUSB
+    mkdir -p strings/0x409
+    printf 'postmarketOS\n' > strings/0x409/manufacturer
+    printf 'YT3-850F gadget\n' > strings/0x409/product
+    printf 'yt3-850f\n' > strings/0x409/serialnumber
+    mkdir -p configs/c.1/strings/0x409
+    printf 'Ethernet\n' > configs/c.1/strings/0x409/configuration
+    printf '250\n' > configs/c.1/MaxPower
+    mkdir -p functions/ecm.usb0
+    printf '02:aa:bb:cc:dd:01\n' > functions/ecm.usb0/host_addr
+    printf '02:aa:bb:cc:dd:02\n' > functions/ecm.usb0/dev_addr
+    ln -sf "$G/functions/ecm.usb0" configs/c.1/ecm.usb0
+    printf '%s\n' "$UDC" > UDC
+    sleep 1
+    ip addr add 172.16.42.1/24 dev usb0 2>/dev/null || true
+    ip link set usb0 up 2>/dev/null || true
+    echo "USB gadget attached to $UDC; usb0 on 172.16.42.1/24"
+}
+
+stop() {
+    [ -d "$G" ] || return 0
+    printf '' > "$G/UDC" 2>/dev/null || true
+    rm -f  "$G"/configs/c.1/ecm.usb0 2>/dev/null || true
+    rmdir  "$G"/configs/c.1/strings/0x409 2>/dev/null || true
+    rmdir  "$G"/configs/c.1 2>/dev/null || true
+    rmdir  "$G"/functions/ecm.usb0 2>/dev/null || true
+    rmdir  "$G"/strings/0x409 2>/dev/null || true
+    rmdir  "$G" 2>/dev/null || true
+}
+
+case "${1:-start}" in
+    start) start ;;
+    stop)  stop  ;;
+    restart) stop; start ;;
+    *) echo "usage: $0 {start|stop|restart}"; exit 1 ;;
+esac

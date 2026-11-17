@@ -1,0 +1,17 @@
+[Unit]
+Description=YT3-850F: DHCP server on usb0 so the PC auto-configures
+After=yt3-usb-gadget.service
+Wants=yt3-usb-gadget.service
+ConditionPathExists=/usr/sbin/dnsmasq
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/dnsmasq -k --interface=usb0 --bind-interfaces \
+    --dhcp-range=172.16.42.10,172.16.42.100,1h \
+    --dhcp-option=3 --dhcp-option=6 \
+    --no-resolv --no-hosts --log-dhcp
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

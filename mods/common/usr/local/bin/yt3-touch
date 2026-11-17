@@ -1,0 +1,348 @@
+#!/usr/bin/env python3
+"""Userspace touchscreen driver for the Lenovo Yoga Tab 3 8 (YT3-850F).
+
+The touch chip is a HiDeep IST700 at I2C 0x6c. The mainline hideep kernel
+driver gives up during a programming-mode probe, so this program takes over:
+power the chip the stock way, read events through the generic I2C interface,
+and feed them to the system as a normal multi-touch screen through uinput.
+"""
+import errno
+import fcntl
+import glob
+import os
+import select
+import shutil
+import struct
+import subprocess
+import sys
+import time
+
+ADDR = 0x6C
+GPIO_POWER, GPIO_RESET, GPIO_INT = 92, 12, 13
+MAX_X, MAX_Y, MAX_TOUCH = 800, 1280, 10
+REG_COUNT, REG_EVENTS, EVENT_SIZE = 0x0240, 0x0242, 10
+FLAG_UP = 0x10
+
+
+def _ioc(d, k, n, s): return (d << 30) | (s << 16) | (k << 8) | n
+_IOC_W, _IOC_R = 1, 2
+I2C_SLAVE_FORCE = 0x0706
+GPIO_GET_CHIPINFO = _ioc(_IOC_R, 0xB4, 0x01, 68)
+GPIO_GET_LINEHANDLE = _ioc(_IOC_R | _IOC_W, 0xB4, 0x03, 364)
+GPIO_GET_LINEEVENT = _ioc(_IOC_R | _IOC_W, 0xB4, 0x04, 48)
+GPIOHANDLE_GET_VALUES = _ioc(_IOC_R | _IOC_W, 0xB4, 0x08, 64)
+GPIOHANDLE_SET_VALUES = _ioc(_IOC_R | _IOC_W, 0xB4, 0x09, 64)
+GPIOHANDLE_INPUT, GPIOHANDLE_OUTPUT, GPIOHANDLE_PULL_UP = 1 << 0, 1 << 1, 1 << 5
+GPIOEVENT_FALLING = 1 << 1
+
+UI_DEV_CREATE = _ioc(0, ord("U"), 1, 0)
+UI_DEV_SETUP = _ioc(_IOC_W, ord("U"), 3, 92)
+UI_ABS_SETUP = _ioc(_IOC_W, ord("U"), 4, 28)
+UI_SET_EVBIT = _ioc(_IOC_W, ord("U"), 100, 4)
+UI_SET_KEYBIT = _ioc(_IOC_W, ord("U"), 101, 4)
+UI_SET_ABSBIT = _ioc(_IOC_W, ord("U"), 103, 4)
+UI_SET_PROPBIT = _ioc(_IOC_W, ord("U"), 110, 4)
+
+EV_SYN, EV_KEY, EV_ABS = 0, 1, 3
+SYN_REPORT, BTN_TOUCH, INPUT_PROP_DIRECT = 0, 0x14A, 1
+ABS_X, ABS_Y = 0x00, 0x01
+ABS_MT_SLOT, ABS_MT_TOUCH_MAJOR = 0x2F, 0x30
+ABS_MT_POSITION_X, ABS_MT_POSITION_Y = 0x35, 0x36
+ABS_MT_TRACKING_ID, ABS_MT_PRESSURE = 0x39, 0x3A
+
+
+def log(msg): print(msg, flush=True)
+
+
+class Gpio:
+    def __init__(self, chip_path, line, flags, value=0, label="yt3-touch"):
+        req = bytearray(364)
+        struct.pack_into("I", req, 0, line)
+        struct.pack_into("I", req, 256, flags)
+        req[260] = value
+        req[324:324 + len(label)] = label.encode()
+        struct.pack_into("I", req, 356, 1)
+        fd = os.open(chip_path, os.O_RDONLY)
+        try: fcntl.ioctl(fd, GPIO_GET_LINEHANDLE, req)
+        finally: os.close(fd)
+        self.fd = struct.unpack_from("i", req, 360)[0]
+
+    def set(self, v):
+        d = bytearray(64); d[0] = 1 if v else 0
+        fcntl.ioctl(self.fd, GPIOHANDLE_SET_VALUES, d)
+
+    def get(self):
+        d = bytearray(64); fcntl.ioctl(self.fd, GPIOHANDLE_GET_VALUES, d); return d[0]
+
+
+class GpioEdge(Gpio):
+    def __init__(self, chip_path, line, handle_flags, label="yt3-touch-int"):
+        req = bytearray(48)
+        struct.pack_into("III", req, 0, line, handle_flags, GPIOEVENT_FALLING)
+        req[12:12 + len(label)] = label.encode()
+        fd = os.open(chip_path, os.O_RDONLY)
+        try: fcntl.ioctl(fd, GPIO_GET_LINEEVENT, req)
+        finally: os.close(fd)
+        self.fd = struct.unpack_from("i", req, 44)[0]
+
+    def wait(self, timeout):
+        r, _, _ = select.select([self.fd], [], [], timeout)
+        if r:
+            try: os.read(self.fd, 16 * 32)
+            except OSError: pass
+        return bool(r)
+
+
+def find_soc_gpiochip():
+    best = None
+    for p in sorted(glob.glob("/dev/gpiochip*")):
+        info = bytearray(68)
+        try:
+            fd = os.open(p, os.O_RDONLY); fcntl.ioctl(fd, GPIO_GET_CHIPINFO, info); os.close(fd)
+        except OSError: continue
+        lines = struct.unpack_from("I", info, 64)[0]
+        log("  %s: %s, %d lines" % (p, info[32:64].split(b"\0")[0].decode(errors="replace"), lines))
+        if lines > GPIO_POWER and (best is None or lines > best[1]): best = (p, lines)
+    if not best: raise SystemExit("ERROR: no GPIO chip with at least %d lines found" % (GPIO_POWER + 1))
+    return best[0]
+
+
+def find_i2c_bus():
+    for dev in glob.glob("/sys/bus/i2c/devices/*-00%02x" % ADDR):
+        bus = os.path.basename(dev).split("-")[0]
+        if os.path.exists(os.path.join(dev, "driver")):
+            raise SystemExit("The kernel driver is bound to the touch chip (%s)." % dev)
+        return int(bus)
+    raise SystemExit("ERROR: no device %#x in /sys/bus/i2c/devices" % ADDR)
+
+
+def open_i2c(bus):
+    subprocess.call(["modprobe", "i2c-dev"], stderr=subprocess.DEVNULL)
+    node = "/dev/i2c-%d" % bus
+    for _ in range(20):
+        if os.path.exists(node): break
+        time.sleep(0.1)
+    if not os.path.exists(node):
+        with open("/sys/class/i2c-dev/i2c-%d/dev" % bus) as f:
+            mj, mn = (int(v) for v in f.read().strip().split(":"))
+        node = "/run/yt3-i2c-%d" % bus
+        if not os.path.exists(node): os.mknod(node, 0o600 | 0o020000, os.makedev(mj, mn))
+    fd = os.open(node, os.O_RDWR); fcntl.ioctl(fd, I2C_SLAVE_FORCE, ADDR); return fd
+
+
+def release_regulator():
+    drv = "/sys/bus/platform/drivers/reg-fixed-voltage"
+    for d in glob.glob(drv + "/*"):
+        nf = os.path.join(d, "of_node", "regulator-name")
+        if not os.path.exists(nf): continue
+        with open(nf, "rb") as f:
+            if f.read().strip(b"\0") != b"reg_ts_vdd": continue
+        with open(os.path.join(drv, "unbind"), "w") as f: f.write(os.path.basename(d))
+        log("  released regulator %s" % os.path.basename(d))
+        return
+    log("  touch regulator already released")
+
+
+def keep_l17_on():
+    """Keep the L17 rail that the touch chip's sensing side needs. The mainline
+    device tree does not list L17 as a touchscreen supply (the stock tree does),
+    so without this the compass driver powers L17 down when idle and touch stops
+    producing events. Setting the compass's runtime PM to 'on' keeps L17 up."""
+    for d in glob.glob("/sys/bus/i2c/devices/0-000c") + glob.glob("/sys/bus/i2c/devices/*-000c"):
+        pc = os.path.join(d, "power/control")
+        if os.path.exists(pc):
+            try:
+                with open(pc, "w") as f: f.write("on\n")
+                log("  kept L17 on via %s (compass runtime PM)" % pc)
+                return True
+            except OSError as e:
+                log("  could not keep L17 on: %s" % e)
+    log("  compass not found; L17 may power down and break touch")
+    return False
+
+
+class Chip:
+    def __init__(self):
+        log("Setting up:")
+        self.bus = find_i2c_bus()
+        log("  touch chip is on I2C bus %d, address %#x" % (self.bus, ADDR))
+        keep_l17_on()
+        release_regulator()
+        chip = find_soc_gpiochip()
+        self.power = Gpio(chip, GPIO_POWER, GPIOHANDLE_OUTPUT, 1, "yt3-touch-power")
+        self.reset = Gpio(chip, GPIO_RESET, GPIOHANDLE_OUTPUT, 0, "yt3-touch-reset")
+        self.irq = None; self.edge = False
+        for cls, f in ((GpioEdge, GPIOHANDLE_INPUT | GPIOHANDLE_PULL_UP), (GpioEdge, GPIOHANDLE_INPUT),
+                       (Gpio, GPIOHANDLE_INPUT | GPIOHANDLE_PULL_UP), (Gpio, GPIOHANDLE_INPUT)):
+            try:
+                self.irq = cls(chip, GPIO_INT, f); self.edge = cls is GpioEdge; break
+            except OSError: continue
+        log("  interrupt line: %s" % ("edge events" if self.edge else
+                                      "level polling" if self.irq else "not available, blind polling"))
+        # Full power cycle on start: this chip sometimes comes up unresponsive after a boot
+        # where the kernel driver tried and failed to bind. Short power cycle fixes it.
+        self.reset.set(0); self.power.set(0); time.sleep(0.3)
+        self.power.set(1); time.sleep(0.05)
+        self.reset.set(1); time.sleep(0.5)
+        self.i2c = open_i2c(self.bus)
+
+    def read(self, reg, n):
+        os.write(self.i2c, struct.pack("<H", reg))
+        return os.read(self.i2c, n)
+
+
+def parse_events(raw):
+    out = []
+    for off in range(0, len(raw) - EVENT_SIZE + 1, EVENT_SIZE):
+        x, y, z, w, flag, _type, idx = struct.unpack_from("<HHHBBBB", raw, off)
+        if idx >= MAX_TOUCH: continue
+        out.append((idx, min(x, MAX_X - 1), min(y, MAX_Y - 1), z, w, bool(flag & FLAG_UP)))
+    return out
+
+
+class TouchDevice:
+    def __init__(self, sink=None):
+        self.slots = {}; self.next_id = 1; self.sink = sink
+        if sink is not None: return
+        subprocess.call(["modprobe", "uinput"], stderr=subprocess.DEVNULL)
+        self.fd = os.open("/dev/uinput", os.O_WRONLY | os.O_NONBLOCK)
+        for ev in (EV_SYN, EV_KEY, EV_ABS): fcntl.ioctl(self.fd, UI_SET_EVBIT, ev)
+        fcntl.ioctl(self.fd, UI_SET_KEYBIT, BTN_TOUCH)
+        fcntl.ioctl(self.fd, UI_SET_PROPBIT, INPUT_PROP_DIRECT)
+        for code, lo, hi, res in ((ABS_X, 0, MAX_X - 1, 7), (ABS_Y, 0, MAX_Y - 1, 7),
+                                   (ABS_MT_SLOT, 0, MAX_TOUCH - 1, 0), (ABS_MT_TRACKING_ID, 0, 65535, 0),
+                                   (ABS_MT_POSITION_X, 0, MAX_X - 1, 7), (ABS_MT_POSITION_Y, 0, MAX_Y - 1, 7),
+                                   (ABS_MT_TOUCH_MAJOR, 0, 255, 0), (ABS_MT_PRESSURE, 0, 65535, 0)):
+            fcntl.ioctl(self.fd, UI_SET_ABSBIT, code)
+            fcntl.ioctl(self.fd, UI_ABS_SETUP, struct.pack("H2x6i", code, 0, lo, hi, 0, 0, res))
+        name = b"HiDeep IST700 touchscreen (yt3-touch)"
+        fcntl.ioctl(self.fd, UI_DEV_SETUP, struct.pack("4H80sI", 0x18, 0x0001, 0x0700, 1, name, 0))
+        fcntl.ioctl(self.fd, UI_DEV_CREATE)
+
+    def _e(self, t, c, v):
+        if self.sink is not None: self.sink.append((t, c, v))
+        else: os.write(self.fd, struct.pack("llHHi", 0, 0, t, c, v))
+
+    def report(self, touches):
+        changed, was = False, bool(self.slots)
+        for i, x, y, z, w, up in touches:
+            if up:
+                if i in self.slots:
+                    self._e(EV_ABS, ABS_MT_SLOT, i); self._e(EV_ABS, ABS_MT_TRACKING_ID, -1)
+                    del self.slots[i]; changed = True
+                continue
+            self._e(EV_ABS, ABS_MT_SLOT, i)
+            if i not in self.slots:
+                self.slots[i] = self.next_id; self._e(EV_ABS, ABS_MT_TRACKING_ID, self.next_id)
+                self.next_id = self.next_id % 65535 + 1
+            self._e(EV_ABS, ABS_MT_POSITION_X, x); self._e(EV_ABS, ABS_MT_POSITION_Y, y)
+            self._e(EV_ABS, ABS_MT_TOUCH_MAJOR, max(w, 1)); self._e(EV_ABS, ABS_MT_PRESSURE, max(z, 1))
+            changed = True
+        if was != bool(self.slots): self._e(EV_KEY, BTN_TOUCH, 1 if self.slots else 0); changed = True
+        if self.slots:
+            first = min(self.slots)
+            for i, x, y, _z, _w, up in touches:
+                if i == first and not up:
+                    self._e(EV_ABS, ABS_X, x); self._e(EV_ABS, ABS_Y, y)
+        if changed: self._e(EV_SYN, SYN_REPORT, 0)
+
+    def release_all(self): self.report([(i, 0, 0, 0, 0, True) for i in list(self.slots)])
+
+
+def frames(chip, until=None):
+    had = False
+    while until is None or time.monotonic() < until:
+        if chip.edge: chip.irq.wait(0.08)
+        elif chip.irq is not None:
+            if chip.irq.get() != 0: time.sleep(0.01); continue
+        else: time.sleep(0.015)
+        try: head = chip.read(REG_COUNT, 2)
+        except OSError: time.sleep(0.05); continue
+        count = head[0]
+        if not 0 < count <= MAX_TOUCH:
+            if had and count == 0: yield []; had = False
+            continue
+        try: raw = chip.read(REG_EVENTS, count * EVENT_SIZE)
+        except OSError: continue
+        f = parse_events(raw)
+        if f:
+            yield f
+            if any(not up for _, _, _, _, _, up in f): had = True
+
+
+def cmd_probe():
+    chip = Chip()
+    log("\nTalking to the chip:")
+    try: head = chip.read(REG_COUNT, 2)
+    except OSError as e: log("  NO ANSWER (%s)" % e); return 1
+    log("  the chip ANSWERS. count=%s irq=%s" % (head.hex(), "?" if chip.irq is None else chip.irq.get()))
+    log("\nNow touch and drag on the screen for 20 seconds...")
+    seen = max_f = 0
+    for f in frames(chip, time.monotonic() + 20):
+        if not f:
+            if seen <= 30: log("  (all up)")
+            continue
+        seen += 1; max_f = max(max_f, sum(1 for _, _, _, _, _, up in f if not up))
+        if seen <= 30:
+            log("  " + "  ".join("#%d %s x=%d y=%d" % (i, "UP" if up else "dn", x, y) for i, x, y, _, _, up in f))
+    if seen:
+        log("\nRESULT: touch works (%d reports, up to %d fingers). Install: sudo %s install" % (seen, max_f, sys.argv[0]))
+        return 0
+    log("\nRESULT: chip answers but no touches. Send me the output."); return 1
+
+
+def cmd_run():
+    chip = Chip()
+    try: chip.read(REG_COUNT, 2)
+    except OSError as e: raise SystemExit("ERROR: touch chip does not answer (%s)" % e)
+    dev = TouchDevice()
+    log("Touchscreen running.")
+    try:
+        for f in frames(chip):
+            if f: dev.report(f)
+            else: dev.release_all()
+    finally: dev.release_all()
+
+
+SERVICE = """[Unit]
+Description=YT3-850F userspace touchscreen driver (HiDeep IST700)
+After=systemd-modules-load.service multi-user.target
+
+[Service]
+ExecStart=/usr/local/bin/yt3-touch run
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+
+def cmd_install():
+    os.makedirs("/usr/local/bin", exist_ok=True)
+    shutil.copyfile(os.path.abspath(sys.argv[0]), "/usr/local/bin/yt3-touch")
+    os.chmod("/usr/local/bin/yt3-touch", 0o755)
+    with open("/etc/systemd/system/yt3-touch.service", "w") as f: f.write(SERVICE)
+    subprocess.check_call(["systemctl", "daemon-reload"])
+    subprocess.check_call(["systemctl", "enable", "--now", "yt3-touch.service"])
+    time.sleep(2)
+    subprocess.call(["systemctl", "--no-pager", "--lines=8", "status", "yt3-touch.service"])
+    return 0
+
+
+def cmd_uninstall():
+    subprocess.call(["systemctl", "disable", "--now", "yt3-touch.service"])
+    for p in ("/etc/systemd/system/yt3-touch.service", "/usr/local/bin/yt3-touch"):
+        if os.path.exists(p): os.remove(p)
+    subprocess.call(["systemctl", "daemon-reload"])
+    return 0
+
+
+def main():
+    cmds = {"probe": cmd_probe, "run": cmd_run, "install": cmd_install, "uninstall": cmd_uninstall}
+    if len(sys.argv) != 2 or sys.argv[1] not in cmds: sys.exit(__doc__)
+    if os.geteuid() != 0: sys.exit("Run it with sudo.")
+    sys.exit(cmds[sys.argv[1]]() or 0)
+
+
+if __name__ == "__main__": main()

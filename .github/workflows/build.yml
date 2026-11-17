@@ -13,6 +13,10 @@ on:
         description: "Publish a GitHub release with the images"
         type: boolean
         default: false
+      mods:
+        description: "Also build a second image with mods/ overlay (touch, USB, audio UCM)"
+        type: boolean
+        default: true
   push:
     branches: [main]
     paths: [".github/workflows/build.yml"]
@@ -162,6 +166,43 @@ jobs:
           sudo cat mnt2/etc/phosh/phoc.ini.d/10-landscape.ini
           sudo umount mnt2
           sudo losetup -d "$LOOP"
+
+      - name: Build mods image (touch, USB, audio UCM)
+        if: github.event.inputs.mods != 'false'
+        run: |
+          set -euo pipefail
+          STABLE="out/${DEVICE}.img"
+          MODS="out/${DEVICE}-mods.img"
+          cp -L "$STABLE" "$MODS"
+          LOOP="$(sudo losetup -f --show -P "$MODS")"
+          sudo mkdir -p mnt_mods
+          sudo mount "${LOOP}p2" mnt_mods
+          echo "--- overlay: common ---"
+          sudo cp -av mods/common/. mnt_mods/
+          echo "--- overlay: audio ---"
+          sudo cp -av mods/audio/. mnt_mods/
+          # Make scripts executable (the Linux ext4 cp preserves +x from the repo,
+          # but belt-and-braces for anything that was committed without it).
+          sudo chmod +x mnt_mods/usr/local/bin/yt3-touch \
+                        mnt_mods/usr/local/bin/yt3-usb-gadget \
+                        mnt_mods/usr/local/bin/yt3-audio-diag
+          # Enable the services at boot (systemctl enable in the chroot would
+          # work but we don't need the complexity; symlinks are what it writes).
+          sudo mkdir -p mnt_mods/etc/systemd/system/multi-user.target.wants
+          for svc in yt3-touch.service yt3-usb-gadget.service yt3-dnsmasq-usb.service; do
+            sudo ln -sf /etc/systemd/system/$svc \
+                mnt_mods/etc/systemd/system/multi-user.target.wants/$svc
+          done
+          # Prefer the YT3-850F UCM when the sound card appears, by making it the
+          # default UCM search path. The card's name comes from the DT (sound
+          # "model = yt3-850f"), so alsa-ucm2 will pick pmos/yt3-850f/yt3-850f.conf.
+          echo "--- services enabled ---"
+          sudo ls -la mnt_mods/etc/systemd/system/multi-user.target.wants/
+          echo "--- UCM files in place ---"
+          sudo ls -la mnt_mods/usr/share/alsa/ucm2/pmos/yt3-850f/ || true
+          sudo umount mnt_mods
+          sudo losetup -d "$LOOP"
+          sha256sum "$MODS" | tee -a out/SHA256SUMS.txt
 
       - name: Fetch lk2nd for MSM8909
         env:

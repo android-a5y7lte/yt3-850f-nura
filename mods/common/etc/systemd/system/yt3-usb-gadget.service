@@ -1,0 +1,14 @@
+[Unit]
+Description=YT3-850F: USB ethernet gadget (CDC/ECM) for SSH-over-USB
+After=sys-kernel-config.mount
+DefaultDependencies=no
+Before=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/yt3-usb-gadget start
+ExecStop=/usr/local/bin/yt3-usb-gadget stop
+
+[Install]
+WantedBy=multi-user.target

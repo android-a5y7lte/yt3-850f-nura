@@ -1,0 +1,44 @@
+#!/bin/sh
+# Collect every piece of information needed to write a working sound-card
+# device-tree node for the YT3-850F. Run on the tablet, redirect output to a
+# file, scp to the PC and send to me.
+echo "=== kernel ==="
+uname -a
+echo
+echo "=== sound cards registered by the kernel ==="
+cat /proc/asound/cards 2>&1
+aplay -l 2>&1
+arecord -l 2>&1
+echo
+echo "=== audio-related DT nodes ==="
+for n in $(find /sys/firmware/devicetree/base -name "sound*" -o -name "lpass*" -o -name "wcd*" \
+                -o -name "*codec*" -o -name "*audio*" -o -name "mi2s*" -o -name "msm-dai*" 2>/dev/null); do
+    short=$(echo "$n" | sed 's|/sys/firmware/devicetree/base||')
+    echo "node: $short"
+    if [ -d "$n" ]; then
+        for f in "$n"/compatible "$n"/status "$n"/reg "$n"/#sound-dai-cells "$n"/model; do
+            [ -f "$f" ] && printf "  %-20s %s\n" "$(basename $f):" "$(tr -d '\0' < "$f" | head -c 200)"
+        done
+    fi
+done
+echo
+echo "=== loaded audio modules ==="
+lsmod 2>/dev/null | grep -i -E 'snd|wcd|msm|lpass|q6|apq' || echo "(none)"
+echo
+echo "=== audio DAPM debug ==="
+ls /sys/kernel/debug/asoc/ 2>/dev/null | head
+for c in /sys/kernel/debug/asoc/*/components 2>/dev/null; do
+    [ -f "$c" ] && { echo "--- $c"; cat "$c"; }
+done
+echo
+echo "=== dmesg hits ==="
+dmesg | grep -i -E 'wcd|codec|lpass|q6|asoc|sound|msm8916-wcd|apq8016|mbhc' | head -60
+echo
+echo "=== I2C devices (any speaker amp?) ==="
+for d in /sys/bus/i2c/devices/*; do
+    [ -f "$d/name" ] && echo "$(basename $d): $(cat $d/name 2>/dev/null)"
+done
+echo
+echo "=== Nokia Sparkler reference ==="
+echo "sibling device DT in the same msm8916-mainline kernel:"
+cat /sys/firmware/devicetree/base/model 2>/dev/null | tr -d '\0'; echo
