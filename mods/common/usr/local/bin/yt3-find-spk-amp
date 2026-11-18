@@ -1,0 +1,60 @@
+#!/bin/sh
+# Find the GPIOs that enable the two AW8736 speaker amplifiers.
+#
+# Lenovo's driver (sound/soc/msm/msm8x16.c, CONFIG_SPEAKER_EXT_PA_AW8736)
+# feeds the speakers from the codec's headphone outputs (HPH_L/HPH_R) and
+# switches two amps on with two GPIOs, but the board DT with their numbers
+# was never published. This plays a tone on HPH and raises each free GPIO in
+# turn for a moment: when you hear the tone from a speaker, note the number.
+#
+# Lines the kernel already uses are skipped automatically (they're "busy").
+# Usage: sudo yt3-find-spk-amp [first] [last]     (default 0..116)
+
+set -u
+FIRST="${1:-0}"
+LAST="${2:-116}"
+HOLD=1.5
+
+[ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
+for t in amixer speaker-test gpioset; do
+	command -v "$t" >/dev/null || { echo "missing $t: sudo apk add alsa-utils libgpiod"; exit 1; }
+done
+
+CARD="$(grep -l lenovo /proc/asound/card*/id 2>/dev/null | head -1 | sed 's|.*/card\([0-9]*\)/id|\1|')"
+[ -n "$CARD" ] || { echo "no lenovo sound card yet: is the new kernel booted?"; cat /proc/asound/cards; exit 1; }
+echo "sound card: $CARD"
+
+# Route PCM to both headphone DACs (the msm8916 WCD codec controls).
+a() { amixer -q -c "$CARD" cset name="$1" "$2" 2>/dev/null || echo "  (mixer: '$1' not set)"; }
+a 'RX1 MIX1 INP1' 'RX1'
+a 'RX2 MIX1 INP1' 'RX2'
+a 'RDAC2 MUX' 'RX2'
+a 'HPHL' 'Switch'
+a 'HPHR' 'Switch'
+a 'RX1 Digital Volume' 84
+a 'RX2 Digital Volume' 84
+
+speaker-test -D "plughw:$CARD,0" -c 2 -t sine -f 440 >/dev/null 2>&1 &
+TONE=$!
+trap 'kill $TONE 2>/dev/null' EXIT INT TERM
+sleep 1
+echo "A quiet tone may already be audible from the headphone jack."
+echo "Listen to the SPEAKERS. Raising each free GPIO for ${HOLD}s..."
+
+# libgpiod v2 holds the line until killed; v1 needs --mode=time.
+if gpioset --help 2>&1 | grep -q -- '--chip'; then V=2; else V=1; fi
+
+n="$FIRST"
+while [ "$n" -le "$LAST" ]; do
+	printf 'GPIO %3s ... ' "$n"
+	if [ "$V" = 2 ]; then
+		timeout "$HOLD" gpioset -c gpiochip0 "$n=1" 2>/tmp/yt3-gpio.err
+		rc=$?; [ "$rc" = 124 ] && rc=0
+	else
+		gpioset --mode=time --usec=1500000 gpiochip0 "$n=1" 2>/tmp/yt3-gpio.err
+		rc=$?
+	fi
+	if [ "$rc" = 0 ]; then echo "tested"; else echo "skipped ($(head -c 60 /tmp/yt3-gpio.err | tr '\n' ' '))"; fi
+	n=$((n + 1))
+done
+echo "Done. Tell Claude which GPIO number(s) made the speakers play."
