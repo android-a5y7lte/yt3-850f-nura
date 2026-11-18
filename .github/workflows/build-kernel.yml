@@ -1,0 +1,115 @@
+name: Build kernel with audio (MSM8909 LPASS)
+
+# Mainline has no MSM8909 audio: the GCC driver lacks the ultaudio/digcodec
+# clocks and the DT has no sound nodes. mods/kernel/ adds both (the LPASS
+# block and WCD codec are the same IP as MSM8916), wires the Yoga Tab 3
+# sound card, and enables the bq27500 fuel gauge + SMB358 charger drivers.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  DEVICE: lenovo-lxf-p5100
+  UI: phosh
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host setup
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq git python3 openssl xz-utils zstd
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+
+      - name: Install pmbootstrap
+        run: |
+          git clone --depth 1 https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git ~/pmbootstrap
+          mkdir -p ~/.local/bin
+          ln -s ~/pmbootstrap/pmbootstrap.py ~/.local/bin/pmbootstrap
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Configure
+        run: |
+          yes "" | pmbootstrap init || true
+          pmbootstrap config device "$DEVICE"
+          pmbootstrap config ui "$UI"
+
+      - name: Find the kernel aport this device uses
+        run: |
+          set -euxo pipefail
+          PMAPORTS="$(pmbootstrap config aports | tail -1)"
+          find "$PMAPORTS" -name APKBUILD -path '*linux-postmarketos-qcom-msm89*' | sort
+          grep -rn "depends\|kernel" "$(find "$PMAPORTS" -type d -name "device-$DEVICE" | head -1)/APKBUILD" || true
+          for k in linux-postmarketos-qcom-msm8909 linux-postmarketos-qcom-msm8916; do
+            d="$(find "$PMAPORTS" -type d -name "$k" -not -path '*/temp/*' | head -1)"
+            if [ -n "$d" ]; then echo "$k" > /tmp/kpkg; echo "$d" > /tmp/kdir; break; fi
+          done
+          cat /tmp/kpkg /tmp/kdir
+          cat "$(cat /tmp/kdir)/APKBUILD"
+          ls "$(cat /tmp/kdir)"
+
+      - name: Add our patches and config
+        run: |
+          set -euxo pipefail
+          KDIR="$(cat /tmp/kdir)"
+          cp mods/kernel/*.patch "$KDIR/"
+          cd "$KDIR"
+          sed -i 's/^pkgrel=.*/pkgrel=100/' APKBUILD
+          for c in config-*armv7*; do
+            [ -f "$c" ] || continue
+            echo "== $c"
+            grep -E 'SND_SOC_(QCOM|LPASS|APQ8016|MSM8916|AW8738)|BQ27XXX|SMB347' "$c" || true
+            printf '\n' >> "$c"
+            cat "$GITHUB_WORKSPACE/mods/kernel/config-additions" >> "$c"
+          done
+          python3 - <<'PY'
+          import re, glob
+          s = open("APKBUILD").read()
+          m = re.search(r'^source="([^"]*)"', s, re.M)
+          assert m, "no source= line"
+          pats = sorted(p for p in glob.glob("0*.patch"))
+          new = 'source="' + m.group(1).rstrip() + "\n" + "".join("\t%s\n" % p for p in pats) + '\t"'
+          s = s[:m.start()] + new + s[m.end():]
+          open("APKBUILD", "w").write(s)
+          PY
+          if ! grep -q 'default_prepare' APKBUILD; then
+            sed -i 's/^prepare() {$/prepare() {\n\tdefault_prepare/' APKBUILD
+          fi
+          sed -n '/^source=/,/"$/p;/^prepare() {/,/^}/p' APKBUILD
+          pmbootstrap checksum "$(cat /tmp/kpkg)"
+
+      - name: Build kernel for armv7
+        run: |
+          pmbootstrap -y build --arch armv7 --force "$(cat /tmp/kpkg)"
+
+      - name: Collect package and DTB
+        run: |
+          set -eux
+          mkdir -p out
+          find ~/.local/var/pmbootstrap/packages -path '*armv7*' -name "$(cat /tmp/kpkg)-[0-9]*-r100.apk" -exec cp {} out/ \;
+          ls -la out/
+          test -n "$(ls out/*.apk)"
+          # Ship the board DTB on its own too, for checking/booting by hand.
+          mkdir -p x && tar -xzf out/*.apk -C x 2>/dev/null || true
+          find x -name 'qcom-msm8909-lenovo-lxf-p5*.dtb' -exec cp {} out/ \;
+          sha256sum out/* | tee out/SHA256SUMS.txt
+
+      - name: Show log tail on failure
+        if: failure()
+        run: tail -n 300 ~/.local/var/pmbootstrap/log.txt || true
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="kernel-audio-$(date +%Y%m%d-%H%M)"
+          gh release create "$TAG" out/* --title "Kernel with MSM8909 audio + battery drivers (armv7)" \
+            --notes "Install on the tablet: sudo apk add --allow-untrusted ./linux-*-r100.apk, then reboot. Keep the old kernel's files as backup first (see README / chat)."
