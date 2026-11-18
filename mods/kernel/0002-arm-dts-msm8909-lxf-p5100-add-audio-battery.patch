@@ -120,16 +120,13 @@
  &sdhc_1 {
  	vmmc-supply = <&pm8909_l8>;
  	vqmmc-supply = <&pm8909_l5>;
---- a/arch/arm/boot/dts/qcom/qcom-msm8909-lenovo-lxf-p5x00.dtsi
-+++ b/arch/arm/boot/dts/qcom/qcom-msm8909-lenovo-lxf-p5x00.dtsi
-@@ -181,10 +181,84 @@
+--- a/arch/arm/boot/dts/qcom/qcom-msm8909-lenovo-lxf-p5100.dts
++++ b/arch/arm/boot/dts/qcom/qcom-msm8909-lenovo-lxf-p5100.dts
+@@ -175,6 +175,92 @@
  	};
  };
  
-+/*
-+ * Also used by the board: SMB358 charger, sensors. Enable the remaining
-+ * BLSP I2C controllers so their clients can be probed from userspace.
-+ */
++/* SMB358 charger (0x57) and sensors; probed from userspace for now. */
 +&blsp_i2c2 {
 +	status = "okay";
 +};
@@ -142,10 +139,16 @@
 +	status = "okay";
 +};
 +
- &blsp_uart1 {
- 	status = "okay";
- };
- 
++&blsp_i2c6 {
++	status = "okay";
++
++	fuel-gauge@55 {
++		compatible = "ti,bq27500";
++		reg = <0x55>;
++		monitored-battery = <&battery>;
++	};
++};
++
 +&lpass {
 +	status = "okay";
 +};
@@ -162,6 +165,11 @@
 +	status = "okay";
 +};
 +
++/*
++ * Per Lenovo's msm8x16.c (CONFIG_SPEAKER_EXT_PA_AW8736 for P5000), the two
++ * speakers hang off HPH_L/HPH_R through two AW8736 amplifiers whose enable
++ * GPIOs aren't in any published source yet; they get added once probed.
++ */
 +&sound {
 +	pinctrl-0 = <&cdc_pdm_default>;
 +	pinctrl-1 = <&cdc_pdm_sleep>;
@@ -204,10 +212,20 @@
 +	};
 +};
 +
+ &blsp_uart1 {
+ 	status = "okay";
+ };
+@@ -182,7 +268,8 @@
+ /* FIXME: Missing the real fuel gauge's node */
+ &pm8909_bms {
+ 	monitored-battery = <&battery>;
+-	status = "okay";
++	/* The bq27500 fuel gauge on blsp_i2c6 is the accurate source. */
++	status = "disabled";
+ };
+ 
  &pm8909_mpps {
- 	pwm_out: mpp2-state {
- 		pins = "mpp2";
-@@ -332,6 +406,20 @@
+@@ -332,6 +419,20 @@
  };
  
  &tlmm {
