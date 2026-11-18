@@ -1,0 +1,52 @@
+#!/bin/sh
+# Identify the Yoga Tab 3 camera sensor.
+#
+# The yt3-cam-power kernel driver switches the camera module on (rails, MCLK,
+# reset/standby). Then the sensor answers on an I2C bus and we can read its
+# chip-ID registers. Compares the bus scan with the module off and on, so
+# only the camera's addresses are probed.
+# Usage: sudo yt3-find-camera
+
+set -u
+[ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
+command -v i2cdetect >/dev/null || { echo "missing i2c-tools: sudo apk add i2c-tools"; exit 1; }
+modprobe i2c-dev 2>/dev/null
+
+scan() {	# list "bus:addr" of everything that ACKs
+	for b in /dev/i2c-*; do
+		n="${b#/dev/i2c-}"
+		i2cdetect -y -r "$n" 2>/dev/null | awk -v n="$n" 'NR>1 {for (i=2;i<=NF;i++) if ($i ~ /^[0-9a-f][0-9a-f]$/ || $i=="UU") printf "%s:%s\n", n, (($i=="UU") ? sprintf("%02x", (NR-2)*16+i-2) : $i)}'
+	done | sort
+}
+
+echo "== module OFF"
+modprobe -r yt3-cam-power 2>/dev/null; sleep 1
+scan > /tmp/cam-off.txt; cat /tmp/cam-off.txt | tr '\n' ' '; echo
+
+echo "== module ON"
+modprobe yt3-cam-power || { echo "yt3-cam-power didn't load: is the new kernel running?"; exit 1; }
+sleep 1
+dmesg | grep -i yt3-cam | tail -3
+scan > /tmp/cam-on.txt; cat /tmp/cam-on.txt | tr '\n' ' '; echo
+
+NEW="$(comm -13 /tmp/cam-off.txt /tmp/cam-on.txt)"
+if [ -z "$NEW" ]; then
+	echo "No new I2C device appeared. Send this whole output to Claude."
+	exit 0
+fi
+
+rd16() {	# bus addr reg16 count -> bytes from a 16-bit register address
+	i2ctransfer -f -y "$1" "w2@0x$2" "$(printf '0x%02x' $(( $3 >> 8 )))" "$(printf '0x%02x' $(( $3 & 255 )))" "r$4" 2>/dev/null || echo "--"
+}
+rd8() { i2ctransfer -f -y "$1" "w1@0x$2" "$3" "r$4" 2>/dev/null || echo "--"; }
+
+for e in $NEW; do
+	b="${e%%:*}"; a="${e##*:}"
+	echo "== new device: bus $b address 0x$a"
+	echo "  OmniVision  0x300a..0x300c : $(rd16 "$b" "$a" 0x300a 3)"
+	echo "  Samsung/SMIA 0x0000..0x0001: $(rd16 "$b" "$a" 0x0000 2)"
+	echo "  Sony IMX    0x0016..0x0017 : $(rd16 "$b" "$a" 0x0016 2)"
+	echo "  Hynix       0x0f16..0x0f17 : $(rd16 "$b" "$a" 0x0f16 2)"
+	echo "  GalaxyCore  0xf0..0xf1     : $(rd8 "$b" "$a" 0xf0 2)"
+done
+echo "Send this whole output to Claude."

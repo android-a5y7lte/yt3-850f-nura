@@ -15,3 +15,5 @@ CONFIG_CHARGER_SMB347=m
 CONFIG_BMC150_ACCEL=m
 CONFIG_BMC150_ACCEL_I2C=m
 CONFIG_AK8975=m
+# Camera module power for sensor identification (mods/kernel/0003)
+CONFIG_YT3_CAM_POWER=m

@@ -196,7 +196,7 @@ jobs:
           sudo cp -av mods/audio/. mnt_mods/
           # Make scripts executable (the Linux ext4 cp preserves +x from the repo,
           # but belt-and-braces for anything that was committed without it).
-          sudo chmod +x mnt_mods/usr/local/bin/yt3-touch mnt_mods/usr/local/bin/yt3-find-spk-amp \
+          sudo chmod +x mnt_mods/usr/local/bin/yt3-touch mnt_mods/usr/local/bin/yt3-find-spk-amp mnt_mods/usr/local/bin/yt3-find-camera \
                         mnt_mods/usr/local/bin/yt3-usb-gadget \
                         mnt_mods/usr/local/bin/yt3-audio-diag \
                         mnt_mods/usr/local/bin/yt3-blank

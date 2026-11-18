@@ -1,0 +1,190 @@
+--- /dev/null
++++ b/drivers/misc/yt3-cam-power.c
+@@ -0,0 +1,123 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Power up the Lenovo Yoga Tab 3 (lxf_p5x00) camera module so the image
++ * sensor answers on its I2C bus and can be identified.
++ *
++ * MSM8909 has no CCI: the sensor sits on a BLSP I2C controller, but it only
++ * responds once its rails are on, MCLK runs and reset/standby are released.
++ * Nothing in mainline does that without a sensor driver, and the sensor
++ * model isn't published. This driver performs the downstream power sequence
++ * (vio -> vana -> vdig -> gpios -> mclk) and holds it until unbound.
++ * Unload with "modprobe -r yt3-cam-power" to switch the module off again.
++ */
++#include <linux/clk.h>
++#include <linux/delay.h>
++#include <linux/gpio/consumer.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/regulator/consumer.h>
++
++static const char * const yt3_cam_supplies[] = { "vio", "vana", "vdig" };
++
++struct yt3_cam {
++	struct regulator_bulk_data regs[ARRAY_SIZE(yt3_cam_supplies)];
++	struct clk *mclk;
++	struct gpio_desc *reset;
++	struct gpio_desc *standby;
++};
++
++static void yt3_cam_off(struct yt3_cam *c)
++{
++	gpiod_set_value_cansleep(c->reset, 1);
++	gpiod_set_value_cansleep(c->standby, 1);
++	clk_disable_unprepare(c->mclk);
++	regulator_bulk_disable(ARRAY_SIZE(c->regs), c->regs);
++}
++
++static int yt3_cam_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct yt3_cam *c;
++	u32 rate = 24000000;
++	int i, ret;
++
++	c = devm_kzalloc(dev, sizeof(*c), GFP_KERNEL);
++	if (!c)
++		return -ENOMEM;
++
++	for (i = 0; i < ARRAY_SIZE(c->regs); i++)
++		c->regs[i].supply = yt3_cam_supplies[i];
++	ret = devm_regulator_bulk_get(dev, ARRAY_SIZE(c->regs), c->regs);
++	if (ret)
++		return dev_err_probe(dev, ret, "failed to get supplies\n");
++
++	c->mclk = devm_clk_get(dev, "mclk");
++	if (IS_ERR(c->mclk))
++		return dev_err_probe(dev, PTR_ERR(c->mclk), "failed to get mclk\n");
++	of_property_read_u32(dev->of_node, "clock-frequency", &rate);
++
++	/* Requested asserted (held in reset/standby) until rails are up. */
++	c->reset = devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_HIGH);
++	if (IS_ERR(c->reset))
++		return dev_err_probe(dev, PTR_ERR(c->reset), "reset gpio\n");
++	c->standby = devm_gpiod_get_optional(dev, "standby", GPIOD_OUT_HIGH);
++	if (IS_ERR(c->standby))
++		return dev_err_probe(dev, PTR_ERR(c->standby), "standby gpio\n");
++
++	/* Downstream order: vio, vana, vdig, each with a short settle time. */
++	for (i = 0; i < ARRAY_SIZE(c->regs); i++) {
++		ret = regulator_enable(c->regs[i].consumer);
++		if (ret) {
++			dev_err(dev, "enabling %s failed: %d\n", c->regs[i].supply, ret);
++			while (--i >= 0)
++				regulator_disable(c->regs[i].consumer);
++			return ret;
++		}
++		usleep_range(1000, 2000);
++	}
++
++	ret = clk_set_rate(c->mclk, rate);
++	if (ret)
++		dev_warn(dev, "setting mclk to %u failed: %d\n", rate, ret);
++	ret = clk_prepare_enable(c->mclk);
++	if (ret) {
++		regulator_bulk_disable(ARRAY_SIZE(c->regs), c->regs);
++		return dev_err_probe(dev, ret, "enabling mclk failed\n");
++	}
++	usleep_range(1000, 2000);
++
++	gpiod_set_value_cansleep(c->standby, 0);
++	usleep_range(5000, 6000);
++	gpiod_set_value_cansleep(c->reset, 0);
++	msleep(20);
++
++	platform_set_drvdata(pdev, c);
++	dev_info(dev, "camera module powered (mclk %lu Hz); scan its I2C bus now\n",
++		 clk_get_rate(c->mclk));
++	return 0;
++}
++
++static void yt3_cam_remove(struct platform_device *pdev)
++{
++	yt3_cam_off(platform_get_drvdata(pdev));
++}
++
++static const struct of_device_id yt3_cam_of_match[] = {
++	{ .compatible = "lenovo,yt3-camera-power" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, yt3_cam_of_match);
++
++static struct platform_driver yt3_cam_driver = {
++	.probe = yt3_cam_probe,
++	.remove = yt3_cam_remove,
++	.driver = {
++		.name = "yt3-cam-power",
++		.of_match_table = yt3_cam_of_match,
++	},
++};
++module_platform_driver(yt3_cam_driver);
++
++MODULE_DESCRIPTION("Yoga Tab 3 camera module power for sensor identification");
++MODULE_LICENSE("GPL");
+--- a/drivers/misc/Kconfig
++++ b/drivers/misc/Kconfig
+@@ -628,4 +628,12 @@
+ source "drivers/misc/pvpanic/Kconfig"
+ source "drivers/misc/mchp_pci1xxxx/Kconfig"
+ source "drivers/misc/keba/Kconfig"
++
++config YT3_CAM_POWER
++	tristate "Lenovo Yoga Tab 3 camera module power (sensor identification)"
++	depends on OF && COMMON_CLK && REGULATOR
++	help
++	  Powers the camera module of the Lenovo Yoga Tab 3 (lxf_p5x00) so
++	  its image sensor can be found and identified on the I2C bus.
++
+ endmenu
+--- a/drivers/misc/Makefile
++++ b/drivers/misc/Makefile
+@@ -72,3 +72,4 @@
+ obj-$(CONFIG_NSM)		+= nsm.o
+ obj-$(CONFIG_MARVELL_CN10K_DPI)	+= mrvl_cn10k_dpi.o
+ obj-y				+= keba/
++obj-$(CONFIG_YT3_CAM_POWER)	+= yt3-cam-power.o
+--- a/arch/arm/boot/dts/qcom/qcom-msm8909-lenovo-lxf-p5100.dts
++++ b/arch/arm/boot/dts/qcom/qcom-msm8909-lenovo-lxf-p5100.dts
+@@ -56,6 +56,25 @@
+ 		default-brightness-level = <255>;
+ 	};
+ 
++	/*
++	 * Rotating 8 MP camera. Rails and GPIOs follow Qualcomm's MSM8909 QRD
++	 * reference (rear sensor: MCLK0 = GPIO26, reset = 35, standby = 34);
++	 * the module only answers on I2C when this is powered.
++	 */
++	camera-power {
++		compatible = "lenovo,yt3-camera-power";
++		clocks = <&gcc GCC_CAMSS_MCLK0_CLK>;
++		clock-names = "mclk";
++		clock-frequency = <24000000>;
++		vio-supply = <&pm8909_l6>;
++		vana-supply = <&pm8909_l17>;
++		vdig-supply = <&pm8909_l2>;
++		reset-gpios = <&tlmm 35 GPIO_ACTIVE_LOW>;
++		standby-gpios = <&tlmm 34 GPIO_ACTIVE_LOW>;
++		pinctrl-0 = <&cam_mclk0_default>;
++		pinctrl-names = "default";
++	};
++
+ 	battery: battery {
+ 		compatible = "simple-battery";
+ 		voltage-min-design-microvolt = <3400000>;
+@@ -429,6 +448,13 @@
+ };
+ 
+ &tlmm {
++	cam_mclk0_default: cam-mclk0-default-state {
++		pins = "gpio26";
++		function = "cam_mclk";
++		drive-strength = <2>;
++		bias-disable;
++	};
++
+ 	cdc_pdm_default: cdc-pdm-default-state {
+ 		pins = "gpio59", "gpio60", "gpio61", "gpio62", "gpio63", "gpio64";
+ 		function = "cdc_pdm0";
