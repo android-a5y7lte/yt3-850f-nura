@@ -67,9 +67,34 @@ jobs:
           PMAPORTS="$(pmbootstrap config aports | tail -1)"
           find "$PMAPORTS" -maxdepth 3 -type d -name "device-$DEVICE" -exec sh -c 'cat "$1/deviceinfo"; echo; cat "$1/APKBUILD"' _ {} \;
 
+      - name: Add our prebuilt packages (kernel, phoc, phosh)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          # Newest release of each of our package builds. They are all -r100,
+          # higher than the archive's, so "pmbootstrap install" prefers them.
+          mkdir -p custom-apks
+          for prefix in kernel-audio- phoc-fastrot- phosh-pinlen-; do
+            tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=50" \
+                     -q "[.[] | select(.tag_name | startswith(\"$prefix\"))][0].tag_name")"
+            if [ -z "$tag" ]; then echo "no $prefix release, skipping"; continue; fi
+            gh release download "$tag" -R "$GITHUB_REPOSITORY" -p '*.apk' -D custom-apks
+          done
+          ls -la custom-apks
+          WORK="$(pmbootstrap config work | tail -1)"
+          REPO="$(find "$WORK/packages" -maxdepth 2 -type d -name armv7 2>/dev/null | head -1)"
+          [ -n "$REPO" ] || REPO="$WORK/packages/edge/armv7"
+          sudo mkdir -p "$REPO"
+          sudo cp custom-apks/*.apk "$REPO/"
+          pmbootstrap index
+          ls -la "$REPO"
+
       - name: Build image
         run: |
           pmbootstrap -y install --password "$PMOS_PASSWORD" --no-sparse
+          echo "--- our packages in the image ---"
+          pmbootstrap chroot -r -- apk list --installed 2>/dev/null | grep -E -- '-r100 ' || true
 
       - name: Export
         run: |
