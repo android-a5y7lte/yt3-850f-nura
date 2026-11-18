@@ -83,7 +83,7 @@ jobs:
           done
           ls -la custom-apks
           WORK="$(pmbootstrap config work | tail -1)"
-          REPO="$(find "$WORK/packages" -maxdepth 2 -type d -name armv7 2>/dev/null | head -1)"
+          REPO="$( (find "$WORK/packages" -maxdepth 2 -type d -name armv7 2>/dev/null || true) | head -1)"
           [ -n "$REPO" ] || REPO="$WORK/packages/edge/armv7"
           sudo mkdir -p "$REPO"
           sudo cp custom-apks/*.apk "$REPO/"
