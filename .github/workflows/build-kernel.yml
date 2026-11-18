@@ -75,7 +75,8 @@ jobs:
           s = open("APKBUILD").read()
           m = re.search(r'^source="([^"]*)"', s, re.M)
           assert m, "no source= line"
-          pats = sorted(p for p in glob.glob("0*.patch"))
+          import os
+          pats = sorted(os.path.basename(p) for p in glob.glob(os.environ["GITHUB_WORKSPACE"] + "/mods/kernel/*.patch"))
           new = 'source="' + m.group(1).rstrip() + "\n" + "".join("\t%s\n" % p for p in pats) + '\t"'
           s = s[:m.start()] + new + s[m.end():]
           open("APKBUILD", "w").write(s)
