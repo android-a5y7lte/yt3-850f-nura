@@ -85,9 +85,22 @@ jobs:
           WORK="$(pmbootstrap config work | tail -1)"
           REPO="$( (find "$WORK/packages" -maxdepth 2 -type d -name armv7 2>/dev/null || true) | head -1)"
           [ -n "$REPO" ] || REPO="$WORK/packages/edge/armv7"
+          CH="$(basename "$(dirname "$REPO")")"
           sudo mkdir -p "$REPO"
           sudo cp custom-apks/*.apk "$REPO/"
-          pmbootstrap index
+          # These were signed by the key of the CI run that built them, which
+          # this run doesn't have. Index them ourselves (--allow-untrusted) and
+          # sign the index with this run's key: apk then trusts each package
+          # through the checksum in the signed index.
+          pmbootstrap chroot -- sh -euxc "
+            chown -R pmos:pmos /mnt/pmbootstrap/packages
+            if ! ls /home/pmos/.abuild/*.rsa >/dev/null 2>&1; then
+              busybox su pmos -c 'HOME=/home/pmos abuild-keygen -n -a'
+            fi
+            cd /mnt/pmbootstrap/packages/$CH/armv7
+            busybox su pmos -c 'HOME=/home/pmos apk index -q --allow-untrusted --output APKINDEX.tar.gz_ --rewrite-arch armv7 *.apk && HOME=/home/pmos abuild-sign APKINDEX.tar.gz_ && mv APKINDEX.tar.gz_ APKINDEX.tar.gz'
+            ls -la
+          "
           ls -la "$REPO"
 
       - name: Build image
