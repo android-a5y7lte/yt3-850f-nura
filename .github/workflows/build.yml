@@ -115,6 +115,7 @@ jobs:
             if ! ls /home/pmos/.abuild/*.rsa >/dev/null 2>&1; then
               busybox su pmos -c 'HOME=/home/pmos abuild-keygen -n -a'
             fi
+            cp /home/pmos/.abuild/*.rsa.pub /etc/apk/keys/
             cd /mnt/pmbootstrap/packages/$CH/armv7
             for c in *.apk.ctrl; do
               p=\${c%.ctrl}
