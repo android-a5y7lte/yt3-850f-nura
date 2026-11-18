@@ -1,0 +1,14 @@
+[Unit]
+Description=zram compressed swap (YT3-850F, 1 GB RAM)
+DefaultDependencies=no
+Before=swap.target
+After=systemd-modules-load.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/yt3-zram
+ExecStop=/bin/sh -c 'swapoff /dev/zram0 2>/dev/null; echo 1 > /sys/block/zram0/reset 2>/dev/null; true'
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,13 @@
+#!/bin/sh
+# Compressed swap in RAM for this 1 GB tablet (zstd, 1.5x RAM).
+# Skips quietly if a zram swap is already active.
+set -e
+grep -q '^/dev/zram' /proc/swaps && exit 0
+modprobe zram num_devices=1 2>/dev/null || true
+[ -e /sys/block/zram0 ] || { echo "no zram support in this kernel"; exit 0; }
+mem_kb=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+echo 1 > /sys/block/zram0/reset 2>/dev/null || true
+echo zstd > /sys/block/zram0/comp_algorithm 2>/dev/null || echo lz4 > /sys/block/zram0/comp_algorithm 2>/dev/null || true
+echo "$(( mem_kb * 3 / 2 ))K" > /sys/block/zram0/disksize
+mkswap /dev/zram0 >/dev/null
+swapon -p 100 /dev/zram0
