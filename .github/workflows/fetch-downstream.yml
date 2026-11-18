@@ -1,0 +1,56 @@
+name: Fetch downstream MSM8909 sources (reference for the audio port)
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  fetch:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Fetch files from Qualcomm's msm-3.10 kernel (android.googlesource.com)
+        run: |
+          set -x
+          mkdir dump && cd dump
+          B="https://android.googlesource.com/kernel/msm/+/refs/heads/android-msm-seed-3.10-n-preview-4"
+          for f in \
+            drivers/clk/qcom/clock-gcc-8909.c \
+            include/dt-bindings/clock/msm-clocks-8909.h \
+            include/dt-bindings/clock/msm-clocks-hwio-8909.h \
+            drivers/clk/qcom/clock-gcc-8916.c \
+            arch/arm/boot/dts/qcom/msm8909.dtsi \
+            arch/arm/boot/dts/qcom/msm8909-pm8909.dtsi \
+            arch/arm/boot/dts/qcom/msm8909-mtp.dtsi \
+            arch/arm/boot/dts/qcom/msm8909-pinctrl.dtsi \
+            arch/arm/boot/dts/qcom/msm-pm8909.dtsi \
+            arch/arm/boot/dts/qcom/msm8909-qrd.dtsi \
+            arch/arm/boot/dts/qcom/msm8909-qrd-skuc.dtsi \
+            sound/soc/msm/msm8x16.c \
+            sound/soc/codecs/msm8x16-wcd.c \
+            sound/soc/codecs/msm8x16-wcd.h \
+            sound/soc/codecs/msm8x16_wcd_registers.h \
+            ; do
+            out="$(echo "$f" | tr / _)"
+            curl -fsSL "$B/$f?format=TEXT" | base64 -d > "$out" || { echo "missing $f"; rm -f "$out"; }
+          done
+          ls -la
+      - name: Lenovo YT3 kernel sources on GitHub (board audio specifics)
+        run: |
+          cd dump
+          for repo in \
+            https://github.com/lenovo-yt3-dev/android_kernel_lenovo_msm8909.git \
+            https://github.com/Lenovo-YT3/android_kernel_lenovo_yt3.git ; do
+            timeout 300 git clone -q --depth 1 --filter=blob:none --sparse "$repo" lenovo 2>/dev/null || continue
+            (cd lenovo && git sparse-checkout set arch/arm/boot/dts/qcom) && break
+          done
+          if [ -d lenovo ]; then
+            find lenovo -iname '*8909*' -iname '*.dts*' | head -50
+            mkdir -p lenovo-dts && find lenovo -iname '*8909*' -iname '*.dts*' -exec cp {} lenovo-dts/ \;
+            rm -rf lenovo
+          fi
+      - name: Push to branch downstream-8909
+        run: |
+          cd dump
+          git init -q -b downstream-8909
+          git config user.name ci; git config user.email ci@localhost
+          git add -A; git commit -qm "downstream msm8909 reference sources"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" downstream-8909
