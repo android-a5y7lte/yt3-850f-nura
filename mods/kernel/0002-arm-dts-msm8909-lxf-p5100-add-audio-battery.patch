@@ -122,7 +122,26 @@
  	vqmmc-supply = <&pm8909_l5>;
 --- a/arch/arm/boot/dts/qcom/qcom-msm8909-lenovo-lxf-p5100.dts
 +++ b/arch/arm/boot/dts/qcom/qcom-msm8909-lenovo-lxf-p5100.dts
-@@ -175,6 +175,92 @@
+@@ -123,7 +123,17 @@
+ 
+ &blsp_i2c1 {
+ 	status = "okay";
+-	/* TODO: add Bochs BMA223 accelerometer/ELAN EPL2102 light sensor here */
++	/* ELAN EPL2102 light sensor (0x49) has no mainline driver yet. */
++
++	/* Bosch BMA223: chip id 0xF8, same as BMA222E; polled (no IRQ wired). */
++	accelerometer@18 {
++		compatible = "bosch,bma222e";
++		reg = <0x18>;
++
++		vdd-supply = <&pm8909_l17>;
++		vddio-supply = <&pm8909_l6>;
++	};
++
+ 	magnetometer@c {
+ 		compatible = "asahi-kasei,ak09911";
+ 		reg = <0x0c>;
+@@ -175,6 +185,92 @@
  	};
  };
  
@@ -215,7 +234,7 @@
  &blsp_uart1 {
  	status = "okay";
  };
-@@ -182,7 +268,8 @@
+@@ -182,7 +278,8 @@
  /* FIXME: Missing the real fuel gauge's node */
  &pm8909_bms {
  	monitored-battery = <&battery>;
@@ -225,7 +244,7 @@
  };
  
  &pm8909_mpps {
-@@ -332,6 +419,20 @@
+@@ -332,6 +429,20 @@
  };
  
  &tlmm {
