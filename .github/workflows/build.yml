@@ -92,7 +92,7 @@ jobs:
           # this run doesn't have. Index them ourselves (--allow-untrusted) and
           # sign the index with this run's key: apk then trusts each package
           # through the checksum in the signed index.
-          pmbootstrap chroot -- sh -euxc "
+          pmbootstrap chroot --add=abuild -- sh -euxc "
             chown -R pmos:pmos /mnt/pmbootstrap/packages
             if ! ls /home/pmos/.abuild/*.rsa >/dev/null 2>&1; then
               busybox su pmos -c 'HOME=/home/pmos abuild-keygen -n -a'
