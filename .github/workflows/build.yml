@@ -86,21 +86,46 @@ jobs:
           REPO="$( (find "$WORK/packages" -maxdepth 2 -type d -name armv7 2>/dev/null || true) | head -1)"
           [ -n "$REPO" ] || REPO="$WORK/packages/edge/armv7"
           CH="$(basename "$(dirname "$REPO")")"
-          sudo mkdir -p "$REPO"
-          sudo cp custom-apks/*.apk "$REPO/"
           # These were signed by the key of the CI run that built them, which
-          # this run doesn't have. Index them ourselves (--allow-untrusted) and
-          # sign the index with this run's key: apk then trusts each package
-          # through the checksum in the signed index.
+          # this run doesn't have. Re-sign them with this run's key, the same
+          # way abuild does: an .apk is three gzip streams (signature, control,
+          # data) and the signature covers the control stream.
+          mkdir -p resign
+          python3 - <<'PY'
+          import glob, os, zlib
+          for apk in glob.glob("custom-apks/*.apk"):
+              b = open(apk, "rb").read()
+              parts, pos = [], 0
+              while pos < len(b):
+                  d = zlib.decompressobj(31)
+                  d.decompress(b[pos:])
+                  used = len(b) - pos - len(d.unused_data)
+                  parts.append(b[pos:pos + used])
+                  pos += used
+              assert len(parts) == 3, (apk, len(parts))
+              base = "resign/" + os.path.basename(apk)
+              open(base + ".ctrl", "wb").write(parts[1])
+              open(base + ".data", "wb").write(parts[2])
+              print(apk, [len(p) for p in parts])
+          PY
+          sudo mkdir -p "$REPO"
+          sudo cp resign/* "$REPO/"
           pmbootstrap chroot --add=abuild -- sh -euxc "
             chown -R pmos:pmos /mnt/pmbootstrap/packages
             if ! ls /home/pmos/.abuild/*.rsa >/dev/null 2>&1; then
               busybox su pmos -c 'HOME=/home/pmos abuild-keygen -n -a'
             fi
             cd /mnt/pmbootstrap/packages/$CH/armv7
-            busybox su pmos -c 'HOME=/home/pmos apk index -q --allow-untrusted --output APKINDEX.tar.gz_ --rewrite-arch armv7 *.apk && HOME=/home/pmos abuild-sign APKINDEX.tar.gz_ && mv APKINDEX.tar.gz_ APKINDEX.tar.gz'
+            for c in *.apk.ctrl; do
+              p=\${c%.ctrl}
+              busybox su pmos -c \"HOME=/home/pmos abuild-sign -q \$c\"
+              cat \$c \${p}.data > \$p
+              rm -f \$c \${p}.data
+              chown pmos:pmos \$p
+            done
             ls -la
           "
+          pmbootstrap index
           ls -la "$REPO"
 
       - name: Build image
