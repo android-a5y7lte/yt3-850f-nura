@@ -45,8 +45,12 @@ echo "Listen to the SPEAKERS. Raising each free GPIO for ${HOLD}s..."
 # libgpiod v2 holds the line until killed; v1 needs --mode=time.
 if gpioset --help 2>&1 | grep -q -- '--chip'; then V=2; else V=1; fi
 
+# Pins that froze the tablet when raised (found the hard way).
+SKIP=" 39 "
+
 n="$FIRST"
 while [ "$n" -le "$LAST" ]; do
+	case "$SKIP" in *" $n "*) echo "GPIO $n ... skipped (froze the tablet before)"; n=$((n + 1)); continue;; esac
 	printf 'GPIO %3s ... ' "$n"
 	if [ "$V" = 2 ]; then
 		timeout "$HOLD" gpioset -c gpiochip0 "$n=1" 2>/tmp/yt3-gpio.err
