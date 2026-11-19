@@ -1,0 +1,43 @@
+#!/bin/sh
+# Find the two AW8736 speaker-amp enable GPIOs, one pin at a time.
+# Plays a tone straight to the codec (PulseAudio paused), raises one GPIO,
+# asks whether the speakers play, then drives it LOW again so nothing stays
+# switched on (a released line keeps its last level on this SoC).
+# Usage: sudo yt3-amp-search [pins...]   (default: the free pins in 0..38)
+
+set -u
+[ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
+PINS="${*:-0 1 2 3 4 5 6 7 8 9 10 11 14 15 16 17 18 19 20 21 22 23 24 25 26 28 29 30 31 32 33 37 38}"
+
+c() { amixer -q -c 0 cset name="$1" "$2" 2>/dev/null; }
+c 'RX1 MIX1 INP1' RX1; c 'RX2 MIX1 INP1' RX2; c 'RDAC2 MUX' RX2
+c 'HPHL' Switch; c 'HPHR' Switch
+c 'RX1 Digital Volume' 84; c 'RX2 Digital Volume' 84
+
+low() { timeout 0.3 gpioset -c gpiochip0 "$1=0" 2>/dev/null; }
+
+# Start with every candidate low, so only the pin under test is on.
+for p in $PINS; do low "$p"; done
+
+# Run the tone as the desktop user's PulseAudio-suspending child.
+U="$(ls -1d /run/user/[0-9]* 2>/dev/null | head -1)"
+USERID="${U##*/}"
+su "$(id -nu "$USERID")" -c "XDG_RUNTIME_DIR=$U pasuspender -- speaker-test -D plughw:0,0 -c 2 -t sine -f 440 -l 0" >/dev/null 2>&1 &
+TONE=$!
+trap 'pkill -f "speaker-test -D plughw:0,0" 2>/dev/null; kill $TONE 2>/dev/null' EXIT
+trap 'echo; echo stopped; exit 130' INT TERM
+sleep 2
+
+FOUND=""
+for p in $PINS; do
+	printf 'GPIO %2s ON  ... ' "$p"
+	timeout 2.5 gpioset -c gpiochip0 "$p=1" 2>/dev/null &
+	sleep 2
+	printf 'speakers playing? [y/n] '
+	read -r ans
+	wait 2>/dev/null
+	low "$p"
+	case "$ans" in y*|Y*) FOUND="$FOUND $p"; echo "  -> GPIO $p noted";; esac
+done
+echo "Speaker GPIOs:${FOUND:- none}"
+echo "Send this line to Claude."
