@@ -1,0 +1,51 @@
+#!/bin/sh
+# Look for the camera sensor's missing enable line.
+# With yt3-cam-power loaded (rails, MCLK, reset/standby as on Qualcomm's
+# reference board), raise each free GPIO for a moment and check whether a
+# new device answers on any I2C bus. Pins are only ever raised, one at a
+# time, and released back to input afterwards.
+# Usage: sudo yt3-cam-gpio-scan [pins...]
+
+set -u
+[ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
+command -v i2cdetect >/dev/null || { echo "sudo apk add i2c-tools"; exit 1; }
+modprobe i2c-dev 2>/dev/null
+modprobe yt3-cam-power 2>/dev/null
+
+# Froze or switched off the tablet when raised: never touch.
+SKIP=" 10 25 39 "
+PINS="${*:-$(seq 0 116)}"
+
+scan() {
+	for b in /dev/i2c-*; do
+		n="${b#/dev/i2c-}"
+		i2cdetect -y -r "$n" 2>/dev/null | awk -v n="$n" 'NR>1 {for (i=2;i<=NF;i++) if ($i ~ /^[0-9a-f][0-9a-f]$/) printf "%s:%s\n", n, $i}'
+	done | sort
+}
+
+scan > /tmp/cam-base.txt
+echo "baseline: $(tr '\n' ' ' < /tmp/cam-base.txt)"
+FOUND=""
+
+for p in $PINS; do
+	case "$SKIP" in *" $p "*) continue;; esac
+	timeout 3 gpioset -c gpiochip0 "$p=1" 2>/dev/null &
+	G=$!
+	sleep 0.8
+	if ! kill -0 "$G" 2>/dev/null; then
+		continue          # line in use by the kernel: skipped
+	fi
+	scan > /tmp/cam-now.txt
+	NEW="$(comm -13 /tmp/cam-base.txt /tmp/cam-now.txt | tr '\n' ' ')"
+	kill "$G" 2>/dev/null; wait "$G" 2>/dev/null
+	gpioget -c gpiochip0 "$p" >/dev/null 2>&1   # back to input
+	if [ -n "$NEW" ]; then
+		echo "GPIO $p -> NEW I2C device(s): $NEW"
+		FOUND="$FOUND $p($NEW)"
+	else
+		printf '.'
+	fi
+done
+echo
+echo "Result:${FOUND:- nothing new appeared}"
+echo "Send this output to Claude."
