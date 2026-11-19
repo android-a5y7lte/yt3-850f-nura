@@ -1,0 +1,18 @@
+iio: accel: bmc150: Fix irq assumption regression (backport)
+
+Without an IRQ the interrupt info is NULL; enabling the buffer
+(iio-sensor-proxy) dereferenced it and oopsed. Newer kernels return early.
+
+--- a/drivers/iio/accel/bmc150-accel-core.c
++++ b/drivers/iio/accel/bmc150-accel-core.c
+@@ -529,6 +529,10 @@
+ 	const struct bmc150_accel_interrupt_info *info = intr->info;
+ 	int ret;
+ 
++	/* We do not always have an IRQ */
++	if (data->irq <= 0)
++		return 0;
++
+ 	if (state) {
+ 		if (atomic_inc_return(&intr->users) > 1)
+ 			return 0;
