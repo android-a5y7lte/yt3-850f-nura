@@ -19,14 +19,17 @@ low() { timeout 0.3 gpioset -c gpiochip0 "$1=0" 2>/dev/null; }
 # Start with every candidate low, so only the pin under test is on.
 for p in $PINS; do low "$p"; done
 
-# Run the tone as the desktop user's PulseAudio-suspending child.
-U="$(ls -1d /run/user/[0-9]* 2>/dev/null | head -1)"
-USERID="${U##*/}"
-su "$(id -nu "$USERID")" -c "XDG_RUNTIME_DIR=$U pasuspender -- speaker-test -D plughw:0,0 -c 2 -t sine -f 440 -l 0" >/dev/null 2>&1 &
+# PulseAudio suspends an idle card after a few seconds, so the codec is
+# free: play straight to it as root (stop anything playing first).
+speaker-test -D plughw:0,0 -c 2 -t sine -f 440 -l 0 >/dev/null 2>/tmp/yt3-tone.err &
 TONE=$!
+sleep 2
+if ! kill -0 "$TONE" 2>/dev/null; then
+	echo "Couldn't start the tone:"; cat /tmp/yt3-tone.err
+	echo "Stop any music/video and try again."; exit 1
+fi
 trap 'pkill -f "speaker-test -D plughw:0,0" 2>/dev/null; kill $TONE 2>/dev/null' EXIT
 trap 'echo; echo stopped; exit 130' INT TERM
-sleep 2
 
 FOUND=""
 for p in $PINS; do
