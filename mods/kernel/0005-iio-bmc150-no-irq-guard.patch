@@ -1,7 +1,8 @@
-iio: accel: bmc150: Fix irq assumption regression (backport)
+iio: accel: bmc150: don't touch interrupt info when no IRQ is wired
 
-Without an IRQ the interrupt info is NULL; enabling the buffer
-(iio-sensor-proxy) dereferenced it and oopsed. Newer kernels return early.
+Without an IRQ the interrupt info is never set up (NULL); enabling the
+buffer (iio-sensor-proxy) dereferenced it and oopsed. Newer kernels return
+early in this case.
 
 --- a/drivers/iio/accel/bmc150-accel-core.c
 +++ b/drivers/iio/accel/bmc150-accel-core.c
@@ -9,8 +10,8 @@ Without an IRQ the interrupt info is NULL; enabling the buffer
  	const struct bmc150_accel_interrupt_info *info = intr->info;
  	int ret;
  
-+	/* We do not always have an IRQ */
-+	if (data->irq <= 0)
++	/* No IRQ wired: interrupts were never set up, so there is no info. */
++	if (!info)
 +		return 0;
 +
  	if (state) {
