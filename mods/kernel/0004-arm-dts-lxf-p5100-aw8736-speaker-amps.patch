@@ -1,0 +1,71 @@
+--- a/arch/arm/boot/dts/qcom/qcom-msm8909-lenovo-lxf-p5100.dts
++++ b/arch/arm/boot/dts/qcom/qcom-msm8909-lenovo-lxf-p5100.dts
+@@ -61,6 +61,29 @@
+ 	 * reference (rear sensor: MCLK0 = GPIO26, reset = 35, standby = 34);
+ 	 * the module only answers on I2C when this is powered.
+ 	 */
++	/*
++	 * Two AW8736 speaker amplifiers fed from HPH_L/HPH_R. Enable GPIOs 16/17
++	 * were found on the device; Lenovo's msm8x16.c (EXT_PA_AW8736) drives
++	 * them with the 2-pulse mode sequence.
++	 */
++	speaker_amp_left: audio-amplifier-left {
++		compatible = "awinic,aw8738";
++		pinctrl-0 = <&spk_ext_pa_left_default>;
++		pinctrl-names = "default";
++		mode-gpios = <&tlmm 16 GPIO_ACTIVE_HIGH>;
++		sound-name-prefix = "Speaker Amp L";
++		awinic,mode = <2>;
++	};
++
++	speaker_amp_right: audio-amplifier-right {
++		compatible = "awinic,aw8738";
++		pinctrl-0 = <&spk_ext_pa_right_default>;
++		pinctrl-names = "default";
++		mode-gpios = <&tlmm 17 GPIO_ACTIVE_HIGH>;
++		sound-name-prefix = "Speaker Amp R";
++		awinic,mode = <2>;
++	};
++
+ 	camera-power {
+ 		compatible = "lenovo,yt3-camera-power";
+ 		clocks = <&gcc GCC_CAMSS_MCLK0_CLK>;
+@@ -254,10 +277,13 @@
+ 	pinctrl-names = "default", "sleep";
+ 
+ 	model = "lenovo-lxf-p5x00";
++	aux-devs = <&speaker_amp_left>, <&speaker_amp_right>;
+ 	widgets = "Speaker", "Speaker",
+ 		  "Headphone", "Headphones";
+-	audio-routing = "Speaker", "HPH_L",
+-			"Speaker", "HPH_R",
++	audio-routing = "Speaker", "Speaker Amp L OUT",
++			"Speaker", "Speaker Amp R OUT",
++			"Speaker Amp L IN", "HPH_L",
++			"Speaker Amp R IN", "HPH_R",
+ 			"Headphones", "HPH_L",
+ 			"Headphones", "HPH_R",
+ 			"AMIC1", "MIC BIAS External1",
+@@ -448,6 +474,22 @@
+ };
+ 
+ &tlmm {
++	spk_ext_pa_left_default: spk-ext-pa-left-default-state {
++		pins = "gpio16";
++		function = "gpio";
++		drive-strength = <2>;
++		bias-disable;
++		output-low;
++	};
++
++	spk_ext_pa_right_default: spk-ext-pa-right-default-state {
++		pins = "gpio17";
++		function = "gpio";
++		drive-strength = <2>;
++		bias-disable;
++		output-low;
++	};
++
+ 	cam_mclk0_default: cam-mclk0-default-state {
+ 		pins = "gpio26";
+ 		function = "cam_mclk";
