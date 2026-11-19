@@ -36,7 +36,8 @@ a 'RX2 Digital Volume' 84
 
 speaker-test -D "plughw:$CARD,0" -c 2 -t sine -f 440 >/dev/null 2>&1 &
 TONE=$!
-trap 'kill $TONE 2>/dev/null' EXIT INT TERM
+trap 'kill $TONE 2>/dev/null' EXIT
+trap 'echo; echo stopped; exit 130' INT TERM
 sleep 1
 echo "A quiet tone may already be audible from the headphone jack."
 echo "Listen to the SPEAKERS. Raising each free GPIO for ${HOLD}s..."
