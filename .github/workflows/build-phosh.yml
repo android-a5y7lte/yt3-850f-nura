@@ -116,7 +116,10 @@ jobs:
 
       - name: Show log tail on failure
         if: failure()
-        run: tail -n 250 ~/.local/var/pmbootstrap/log.txt || true
+        run: |
+          L=~/.local/var/pmbootstrap/log.txt
+          echo "=== apk/script errors ==="; grep -n -iE "ERROR:|script exited|exited with error|\.(pre|post)-(install|upgrade)" $L | tail -40 || true
+          echo "=== tail ==="; tail -n 120 $L || true
 
       - name: Publish release
         env:
