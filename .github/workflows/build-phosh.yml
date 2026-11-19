@@ -61,7 +61,7 @@ jobs:
           rm -rf "$PMAPORTS/temp/phosh"  # make sure only one phosh aport exists
           [ -d "$DEST" ] || { echo "no phosh aport"; exit 1; }
           echo "Using aport: $DEST"; echo "$DEST" > /tmp/phosh-aport
-          cp mods/phosh/0100-pin-length-fallback-file.patch "$DEST/"
+          cp mods/phosh/*.patch "$DEST/"
           cd "$DEST"
           grep -E '^(pkgver|pkgrel)=' APKBUILD
           # Stay ahead of the archive's phosh so apk won't swap ours back.
@@ -76,7 +76,9 @@ jobs:
           s = open(p).read()
           m = re.search(r'^source="([^"]*)"', s, re.M)
           assert m, "no source= line"
-          new = 'source="' + m.group(1).rstrip() + '\n\t0100-pin-length-fallback-file.patch\n\t"'
+          import glob, os
+          pats = sorted(os.path.basename(x) for x in glob.glob(os.environ['GITHUB_WORKSPACE'] + '/mods/phosh/*.patch'))
+          new = 'source="' + m.group(1).rstrip() + '\n' + ''.join('\t%s\n' % x for x in pats) + '\t"'
           s = s[:m.start()] + new + s[m.end():]
           open(p, "w").write(s)
           PY
@@ -106,7 +108,7 @@ jobs:
           set -eux
           mkdir -p out
           find ~/.local/var/pmbootstrap/packages -path '*armv7*' -name '*-r100.apk' \
-            \( -name 'phosh-[0-9]*' -o -name 'libphosh-[0-9]*' -o -name 'phosh-schemas-[0-9]*' -o -name 'phosh-portalsconf-[0-9]*' -o -name 'phosh-systemd-[0-9]*' \) \
+            \( -name 'phosh*' -o -name 'libphosh*' \) \
             -exec cp {} out/ \;
           ls -la out/
           test -n "$(ls out/*.apk)"
@@ -120,6 +122,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="phosh-pinlen-$(date +%Y%m%d-%H%M)"
+          TAG="phosh-pinlen-$(date +%Y%m%d-%H%M)"  # PIN auto-submit + netspeed icon + no cellular tile
           gh release create "$TAG" out/* --title "phosh with PIN auto-submit fallback (armv7)" \
             --notes "Install on the tablet: sudo apk add --allow-untrusted ./*-r100.apk, then echo 6 | sudo tee /etc/phosh/pin-length && sudo systemctl restart greetd"

@@ -1,0 +1,313 @@
+Subject: [PATCH] YT3-850F: hide the cellular tile without a modem; network-speed status icon
+
+---
+--- a/plugins/meson.build
++++ b/plugins/meson.build
+@@ -85,6 +85,7 @@
+ status_icon_plugins = [
+   'camera-status-icon',
+   'load-meter-status-icon',
++  'netspeed-status-icon',
+   'simple-custom-status-icon',
+ ]
+ 
+--- a/src/ui/quick-settings.ui
++++ b/src/ui/quick-settings.ui
+@@ -9,7 +9,7 @@
+         <property name="spacing">6</property>
+         <child>
+           <object class="PhoshQuickSetting">
+-            <property name="visible">1</property>
++            <property name="visible" bind-source="wwaninfo" bind-property="present" bind-flags="sync-create"/>
+             <property name="sensitive" bind-source="wwaninfo" bind-property="present" bind-flags="sync-create"/>
+             <property name="status-icon">wwaninfo</property>
+             <property name="long-press-action-name">panel.launch-mobile-panel</property>
+--- /dev/null
++++ b/plugins/netspeed-status-icon/icons/netspeed-status-icon-symbolic.svg
+@@ -0,0 +1 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path fill="#2e3436" d="M4 1 1 5h2v10h2V5h2zm8 14 3-4h-2V1h-2v10H9z"/></svg>
+--- /dev/null
++++ b/plugins/netspeed-status-icon/meson.build
+@@ -0,0 +1,47 @@
++name = 'netspeed-status-icon'
++
++netspeed_status_icon_resources = gnome.compile_resources(
++  'phosh-plugin-netspeed-status-icon-resources',
++  'phosh-plugin-netspeed-status-icon.gresources.xml',
++  c_name: 'phosh_plugin_netspeed_status_icon',
++)
++
++netspeed_status_icon_plugin_sources = files(
++  'netspeed-status-icon.c',
++  'phosh-plugin-netspeed-status-icon.c',
++)
++
++phosh_netspeed_status_icon_plugin = shared_module(
++  'phosh-plugin-netspeed-status-icon',
++  netspeed_status_icon_plugin_sources,
++  netspeed_status_icon_resources,
++  c_args: [
++    '-DG_LOG_DOMAIN="phosh-plugin-@0@"'.format(name),
++    '-DPLUGIN_NAME="@0@"'.format(name),
++  ],
++  dependencies: plugin_dep,
++  install: true,
++  install_dir: plugins_dir,
++)
++
++pluginconf = configuration_data()
++pluginconf.set('name', name)
++pluginconf.set('plugins_dir', plugins_dir)
++
++i18n.merge_file(
++  input: configure_file(
++    input: name + '.desktop.in.in',
++    output: name + '.desktop.in',
++    configuration: pluginconf,
++  ),
++  output: name + '.plugin',
++  po_dir: join_paths(meson.project_source_root(), 'po'),
++  install: true,
++  install_dir: plugins_dir,
++  type: 'desktop',
++)
++
++install_data(
++  'icons/netspeed-status-icon-symbolic.svg',
++  install_dir: phosh_plugin_icon_dir,
++)
+--- /dev/null
++++ b/plugins/netspeed-status-icon/netspeed-status-icon.c
+@@ -0,0 +1,135 @@
++/*
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ *
++ * Live network throughput in the top bar (YT3-850F port).
++ * Sums the byte counters of all interfaces except loopback from
++ * /proc/net/dev and shows the download/upload rate.
++ */
++
++#include "netspeed-status-icon.h"
++
++#include <stdio.h>
++#include <string.h>
++
++#define INTERVAL 2
++
++struct _PhoshNetspeedStatusIcon {
++  PhoshStatusIcon parent;
++  GtkLabel       *label;
++  guint           timeout_id;
++  guint64         last_rx;
++  guint64         last_tx;
++  gint64          last_time;
++};
++
++G_DEFINE_TYPE (PhoshNetspeedStatusIcon, phosh_netspeed_status_icon, PHOSH_TYPE_STATUS_ICON);
++
++
++static gboolean
++read_counters (guint64 *rx, guint64 *tx)
++{
++  g_autoptr (FILE) f = NULL;
++  char line[512];
++  int n = 0;
++
++  *rx = *tx = 0;
++  f = fopen ("/proc/net/dev", "r");
++  if (!f)
++    return FALSE;
++
++  while (fgets (line, sizeof (line), f)) {
++    char *colon, *name;
++    unsigned long long r, t, d;
++
++    if (n++ < 2)              /* two header lines */
++      continue;
++    colon = strchr (line, ':');
++    if (!colon)
++      continue;
++    *colon = '\0';
++    name = g_strstrip (line);
++    if (g_str_equal (name, "lo"))
++      continue;
++    /* rx: bytes packets errs drop fifo frame compressed multicast | tx: bytes */
++    if (sscanf (colon + 1, "%llu %llu %llu %llu %llu %llu %llu %llu %llu",
++                &r, &d, &d, &d, &d, &d, &d, &d, &t) != 9)
++      continue;
++    *rx += r;
++    *tx += t;
++  }
++  return TRUE;
++}
++
++
++static char *
++format_rate (double bytes_per_s)
++{
++  if (bytes_per_s >= 1000.0 * 1000.0)
++    return g_strdup_printf ("%.1fM", bytes_per_s / (1000.0 * 1000.0));
++  if (bytes_per_s >= 1000.0)
++    return g_strdup_printf ("%.0fK", bytes_per_s / 1000.0);
++  return g_strdup_printf ("%.0fB", bytes_per_s);
++}
++
++
++static gboolean
++on_timeout (gpointer data)
++{
++  PhoshNetspeedStatusIcon *self = PHOSH_NETSPEED_STATUS_ICON (data);
++  g_autofree char *down = NULL, *up = NULL, *text = NULL;
++  guint64 rx, tx;
++  gint64 now = g_get_monotonic_time ();
++  double secs;
++
++  if (!read_counters (&rx, &tx))
++    return G_SOURCE_CONTINUE;
++
++  if (self->last_time && now > self->last_time && rx >= self->last_rx && tx >= self->last_tx) {
++    secs = (now - self->last_time) / (double) G_USEC_PER_SEC;
++    down = format_rate ((rx - self->last_rx) / secs);
++    up = format_rate ((tx - self->last_tx) / secs);
++    text = g_strdup_printf ("↓%s ↑%s", down, up);
++    gtk_label_set_text (self->label, text);
++  }
++
++  self->last_rx = rx;
++  self->last_tx = tx;
++  self->last_time = now;
++
++  return G_SOURCE_CONTINUE;
++}
++
++
++static void
++phosh_netspeed_status_icon_dispose (GObject *object)
++{
++  PhoshNetspeedStatusIcon *self = PHOSH_NETSPEED_STATUS_ICON (object);
++
++  g_clear_handle_id (&self->timeout_id, g_source_remove);
++
++  G_OBJECT_CLASS (phosh_netspeed_status_icon_parent_class)->dispose (object);
++}
++
++
++static void
++phosh_netspeed_status_icon_class_init (PhoshNetspeedStatusIconClass *klass)
++{
++  GObjectClass *object_class = G_OBJECT_CLASS (klass);
++  GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
++
++  object_class->dispose = phosh_netspeed_status_icon_dispose;
++
++  gtk_widget_class_set_template_from_resource (widget_class,
++                                               "/mobi/phosh/plugins/netspeed-status-icon/si.ui");
++  gtk_widget_class_bind_template_child (widget_class, PhoshNetspeedStatusIcon, label);
++}
++
++
++static void
++phosh_netspeed_status_icon_init (PhoshNetspeedStatusIcon *self)
++{
++  gtk_widget_init_template (GTK_WIDGET (self));
++
++  self->timeout_id = g_timeout_add_seconds (INTERVAL, on_timeout, self);
++  on_timeout (self);
++}
+--- /dev/null
++++ b/plugins/netspeed-status-icon/netspeed-status-icon.desktop.in.in
+@@ -0,0 +1,8 @@
++[Plugin]
++# Translators: This is an internal id, no need to translate it
++Id=@name@
++Name=Network Speed Status Icon
++Types=status-icon;
++Comment=Live download and upload rate in the top bar.
++Plugin=@plugins_dir@/libphosh-plugin-@name@.so
++Icon=netspeed-status-icon
+--- /dev/null
++++ b/plugins/netspeed-status-icon/netspeed-status-icon.h
+@@ -0,0 +1,19 @@
++/*
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ *
++ * Live network throughput in the top bar (YT3-850F port).
++ */
++
++#include "status-icon.h"
++
++#pragma once
++
++G_BEGIN_DECLS
++
++#define PHOSH_TYPE_NETSPEED_STATUS_ICON phosh_netspeed_status_icon_get_type ()
++
++G_DECLARE_FINAL_TYPE (PhoshNetspeedStatusIcon,
++                      phosh_netspeed_status_icon,
++                      PHOSH, NETSPEED_STATUS_ICON, PhoshStatusIcon)
++
++G_END_DECLS
+--- /dev/null
++++ b/plugins/netspeed-status-icon/phosh-plugin-netspeed-status-icon.c
+@@ -0,0 +1,35 @@
++/*
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#include "phosh-plugin.h"
++#include "netspeed-status-icon.h"
++
++char **g_io_phosh_plugin_netspeed_status_icon_query (void);
++
++
++void
++g_io_module_load (GIOModule *module)
++{
++  g_type_module_use (G_TYPE_MODULE (module));
++
++  g_io_extension_point_implement (PHOSH_PLUGIN_EXTENSION_POINT_STATUS_ICON_WIDGET,
++                                  PHOSH_TYPE_NETSPEED_STATUS_ICON,
++                                  PLUGIN_NAME,
++                                  10);
++}
++
++
++void
++g_io_module_unload (GIOModule *module)
++{
++}
++
++
++char **
++g_io_phosh_plugin_netspeed_status_icon_query (void)
++{
++  char *extension_points[] = {PHOSH_PLUGIN_EXTENSION_POINT_STATUS_ICON_WIDGET, NULL};
++
++  return g_strdupv (extension_points);
++}
+--- /dev/null
++++ b/plugins/netspeed-status-icon/phosh-plugin-netspeed-status-icon.gresources.xml
+@@ -0,0 +1,6 @@
++<?xml version="1.0" encoding="utf-8"?>
++<gresources>
++  <gresource prefix="/mobi/phosh/plugins/netspeed-status-icon/">
++    <file preprocess="xml-stripblanks">si.ui</file>
++  </gresource>
++</gresources>
+--- /dev/null
++++ b/plugins/netspeed-status-icon/si.ui
+@@ -0,0 +1,14 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<interface>
++  <requires lib="gtk+" version="3.24"/>
++  <template class="PhoshNetspeedStatusIcon" parent="PhoshStatusIcon">
++    <property name="visible">1</property>
++    <property name="extra-widget">label</property>
++    <property name="pixel-size">0</property>
++    <property name="priority">5</property>
++  </template>
++  <object class="GtkLabel" id="label">
++    <property name="visible">1</property>
++    <property name="label">↓0B ↑0B</property>
++  </object>
++</interface>
