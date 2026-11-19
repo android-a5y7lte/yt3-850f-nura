@@ -1,0 +1,29 @@
+drm/msm: headless GPU behind an IOMMU needs no VRAM carveout
+
+--- a/drivers/gpu/drm/msm/msm_drv.c
++++ b/drivers/gpu/drm/msm/msm_drv.c
+@@ -119,7 +119,9 @@
+ 	 */
+ 	return priv->is_a2xx ||
+ 		device_iommu_mapped(dev->dev) ||
+-		device_iommu_mapped(dev->dev->parent);
++		device_iommu_mapped(dev->dev->parent) ||
++		/* headless (render-only): the IOMMU sits on the GPU itself */
++		(priv->gpu_pdev && device_iommu_mapped(&priv->gpu_pdev->dev));
+ }
+ 
+ static int msm_init_vram(struct drm_device *dev)
+@@ -160,7 +162,12 @@
+ 		 * Grab the entire DMA chunk carved out in early startup in
+ 		 * mach-msm:
+ 		 */
+-	} else if (!msm_use_mmu(dev)) {
++	} else if (!msm_use_mmu(dev) && dev->dev->of_node) {
++		/*
++		 * The headless dummy device (no of_node) has no display and its
++		 * GPU is checked later (gpu_pdev is not bound yet here); a
++		 * render-only GPU behind an IOMMU needs no carveout.
++		 */
+ 		DRM_INFO("using %s VRAM carveout\n", vram);
+ 		size = memparse(vram, NULL);
+ 	}
