@@ -7,7 +7,10 @@ mkdir -p $U/Lenovo/yt3-850f $U/conf.d/lenovo-lxf-p5x0
 rm -rf $U/pmos/yt3-850f
 for f in yt3-850f.conf HiFi.conf; do wget -q -O $U/Lenovo/yt3-850f/$f $B/Lenovo/yt3-850f/$f; done
 for n in lenovo-lxf-p5x0 lenovo-lxf-p5x00; do ln -sf ../../Lenovo/yt3-850f/yt3-850f.conf $U/conf.d/lenovo-lxf-p5x0/$n.conf; done
+# postmarketOS ucm.conf (Syntax 3) uses the legacy ${CardDriver}/${CardLongName}.conf layout
+mkdir -p $U/lenovo-lxf-p5x0
+for n in lenovo-lxf-p5x0 lenovo-lxf-p5x00; do ln -sf ../Lenovo/yt3-850f/yt3-850f.conf $U/lenovo-lxf-p5x0/$n.conf; done
 echo "--- UCM check ---"
 alsaucm -c hw:0 list _verbs || echo "UCM: profile not found for this card"
 alsaucm -c hw:0 set _verb HiFi list _devices || true
-echo "Now, as the normal user (not sudo): systemctl --user restart wireplumber pipewire pipewire-pulse"
+echo "Now, as the normal user (not sudo): systemctl --user restart wireplumber pipewire"
