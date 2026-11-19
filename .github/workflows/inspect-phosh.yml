@@ -15,6 +15,8 @@ jobs:
           mkdir dump
           cd phosh-0.59.0
           grep -rln -iE "keypad|unlock|auth" src | sort > ../dump/phosh-files.txt
+          # Whole source tree too (small), for later investigations (backlight, monitors, ...)
+          tar czf ../dump/phosh-full.tgz --exclude=.git src data meson.build meson_options.txt 2>/dev/null || tar czf ../dump/phosh-full.tgz src data
           tar czf ../dump/phosh-um.tgz src/user-manager* data/*.xml data/*accounts* 2>/dev/null || true; grep -rln -i "pin.length\|pin_length\|PinLength" . > ../dump/pinlength-files.txt || true; tar czf ../dump/phosh-src.tgz src/lockscreen* src/keypad* src/auth* src/lockscreen-manager* src/ui/lockscreen* src/ui/keypad* data/mobi.phosh.shell.gschema.xml 2>/dev/null || tar czf ../dump/phosh-src.tgz src data/*.gschema.xml
           cd ..
           git clone -q --depth 1 https://github.com/samcday/phrog.git phrog || true
