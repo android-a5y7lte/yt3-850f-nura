@@ -34,10 +34,11 @@ FOUND=""
 for p in $PINS; do
 	printf 'GPIO %2s ON  ... ' "$p"
 	timeout 2.5 gpioset -c gpiochip0 "$p=1" 2>/dev/null &
+	G=$!
 	sleep 2
 	printf 'speakers playing? [y/n] '
 	read -r ans
-	wait 2>/dev/null
+	wait "$G" 2>/dev/null
 	release "$p"
 	case "$ans" in y*|Y*) FOUND="$FOUND $p"; echo "  -> GPIO $p noted";; esac
 done
