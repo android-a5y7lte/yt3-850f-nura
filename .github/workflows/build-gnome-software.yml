@@ -60,7 +60,7 @@ jobs:
               su b -c "abuild-keygen -a -n -i"
               cd /home/b/gs
               su b -c "abuild checksum && abuild -r"
-              find /home/b/packages -name "gnome-software*-r100.apk" -exec cp {} /out/ \;
+              find /home/b -name "gnome-software*-r100.apk" -exec cp {} /out/ \;
             '
           ls -la out
           test -n "$(ls out/*.apk)"
