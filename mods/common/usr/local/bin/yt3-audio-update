@@ -1,0 +1,13 @@
+#!/bin/sh
+# Install the YT3-850F audio profile (UCM) from the repo and reload PipeWire.
+set -e
+B=https://raw.githubusercontent.com/android-a5y7lte/yt3-850f-nura/main/mods/audio/usr/share/alsa/ucm2
+U=/usr/share/alsa/ucm2
+mkdir -p $U/Lenovo/yt3-850f $U/conf.d/lenovo-lxf-p5x0
+rm -rf $U/pmos/yt3-850f
+for f in yt3-850f.conf HiFi.conf; do wget -q -O $U/Lenovo/yt3-850f/$f $B/Lenovo/yt3-850f/$f; done
+for n in lenovo-lxf-p5x0 lenovo-lxf-p5x00; do ln -sf ../../Lenovo/yt3-850f/yt3-850f.conf $U/conf.d/lenovo-lxf-p5x0/$n.conf; done
+echo "--- UCM check ---"
+alsaucm -c hw:0 list _verbs
+alsaucm -c hw:0 -n set _verb HiFi list _devices
+echo "Now, as the normal user (not sudo): systemctl --user restart wireplumber pipewire pipewire-pulse"
