@@ -1,0 +1,8 @@
+{
+  "name": "yt3-850f",
+  "parent-theme": "default",
+  "profiles": [
+    { "name": "full", "feedbacks": [ { "event-name": "button-pressed", "type": "VibraRumble", "duration": 50 } ] },
+    { "name": "quiet", "feedbacks": [ { "event-name": "button-pressed", "type": "VibraRumble", "duration": 50 } ] }
+  ]
+}
