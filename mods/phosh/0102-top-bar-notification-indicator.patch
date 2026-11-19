@@ -1,0 +1,80 @@
+Subject: [PATCH] YT3-850F: notification indicator in the top bar next to Wi-Fi/Bluetooth
+
+---
+--- a/src/top-panel.c
++++ b/src/top-panel.c
+@@ -18,6 +18,8 @@
+ 
+ #include "layersurface-priv.h"
+ #include "layout-manager.h"
++#include "notifications/notify-manager.h"
++#include "notifications/notification-list.h"
+ #include "plugin-loader.h"
+ #include "shell-priv.h"
+ #include "session-manager.h"
+@@ -92,6 +94,7 @@
+   GtkWidget *box_top_bar;
+   GtkWidget *lbl_clock;      /* top-bar clock */
+   GtkWidget *lbl_lang;
++  GtkWidget *notif_indicator;
+   PhoshStatusIconsBox *status_icons_box;
+ 
+   GSettings           *custom_status_icons_settings;
+@@ -950,6 +953,7 @@
+   gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, lbl_clock2);
+   gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, lbl_date);
+   gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, lbl_lang);
++  gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, notif_indicator);
+   gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, menu_system);
+   gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, settings);
+   gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, stack);
+@@ -1082,6 +1086,16 @@
+ 
+ 
+ static void
++on_notifications_changed (PhoshTopPanel *self)
++{
++  PhoshNotifyManager *manager = phosh_notify_manager_get_default ();
++  GListModel *list = G_LIST_MODEL (phosh_notify_manager_get_list (manager));
++
++  gtk_widget_set_visible (self->notif_indicator, g_list_model_get_n_items (list) > 0);
++}
++
++
++static void
+ phosh_top_panel_init (PhoshTopPanel *self)
+ {
+   PhoshLayoutManager *layout_manager;
+@@ -1102,6 +1116,13 @@
+                            G_CONNECT_SWAPPED);
+   on_layout_changed (self, layout_manager);
+ 
++  g_signal_connect_object (phosh_notify_manager_get_list (phosh_notify_manager_get_default ()),
++                           "items-changed",
++                           G_CALLBACK (on_notifications_changed),
++                           self,
++                           G_CONNECT_SWAPPED);
++  on_notifications_changed (self);
++
+   self->custom_status_icons_settings = g_settings_new (CUSTOM_STATUS_ICONS_SCHEMA);
+   self->custom_status_icons_loader = phosh_plugin_loader_new ((GStrv) plugin_dirs,
+                                                               PHOSH_EXTENSION_POINT_STATUS_ICON_WIDGET);
+--- a/src/ui/top-panel.ui
++++ b/src/ui/top-panel.ui
+@@ -243,6 +243,16 @@
+                           </object>
+                         </child>
+                         <child>
++                          <!-- YT3-850F: shown while there are notifications -->
++                          <object class="GtkImage" id="notif_indicator">
++                            <property name="visible">0</property>
++                            <property name="no-show-all">1</property>
++                            <property name="icon-name">preferences-system-notifications-symbolic</property>
++                            <property name="pixel-size">16</property>
++                            <property name="margin-start">4</property>
++                          </object>
++                        </child>
++                        <child>
+                           <object class="PhoshRevealer">
+                             <property name="visible">1</property>
+                             <property name="show-child" bind-source="vpn_info" bind-property="enabled" bind-flags="sync-create"/>
