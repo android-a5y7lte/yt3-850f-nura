@@ -19,3 +19,6 @@ CONFIG_AK8975=m
 CONFIG_YT3_CAM_POWER=m
 # ELAN EPL2102 ambient light sensor (mods/kernel/0006)
 CONFIG_EPL2102=m
+# Adreno 304 render-only GPU (mods/kernel/0007) and its IOMMU
+CONFIG_DRM_MSM=m
+CONFIG_QCOM_IOMMU=y

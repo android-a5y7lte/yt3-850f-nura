@@ -1,0 +1,196 @@
+drm/msm: Adreno 304 (MSM8909) as a render-only GPU
+
+--- a/drivers/gpu/drm/msm/adreno/a3xx_catalog.c
++++ b/drivers/gpu/drm/msm/adreno/a3xx_catalog.c
+@@ -20,6 +20,18 @@
+ 		.inactive_period = DRM_MSM_INACTIVE_PERIOD,
+ 		.init  = a3xx_gpu_init,
+ 	}, {
++		/* MSM8909 (downstream: chipid 0x03000400, gmem 64K + 32K) */
++		.chip_ids = ADRENO_CHIP_IDS(0x03000400),
++		.family = ADRENO_3XX,
++		.revn  = 304,
++		.fw = {
++			[ADRENO_FW_PM4] = "a300_pm4.fw",
++			[ADRENO_FW_PFP] = "a300_pfp.fw",
++		},
++		.gmem  = SZ_64K + SZ_32K,
++		.inactive_period = DRM_MSM_INACTIVE_PERIOD,
++		.init  = a3xx_gpu_init,
++	}, {
+ 		.chip_ids = ADRENO_CHIP_IDS(0x03000520),
+ 		.family = ADRENO_3XX,
+ 		.revn  = 305,
+--- a/drivers/gpu/drm/msm/adreno/a3xx_gpu.c
++++ b/drivers/gpu/drm/msm/adreno/a3xx_gpu.c
+@@ -141,6 +141,9 @@
+ 		gpu_write(gpu, REG_A3XX_VBIF_OUT_WR_LIM_CONF0, 0x00000018);
+ 		gpu_write(gpu, REG_A3XX_VBIF_DDR_OUT_MAX_BURST, 0x00000303);
+ 		gpu_write(gpu, REG_A3XX_VBIF_ROUND_ROBIN_QOS_ARB, 0x0003);
++	} else if (adreno_is_a304(adreno_gpu)) {
++		/* downstream kgsl a304_vbif */
++		gpu_write(gpu, REG_A3XX_VBIF_ROUND_ROBIN_QOS_ARB, 0x0003);
+ 	} else if (adreno_is_a306(adreno_gpu)) {
+ 		gpu_write(gpu, REG_A3XX_VBIF_ROUND_ROBIN_QOS_ARB, 0x0003);
+ 		gpu_write(gpu, REG_A3XX_VBIF_OUT_RD_LIM_CONF0, 0x0000000a);
+@@ -241,7 +244,8 @@
+ 	gpu_write(gpu, REG_A3XX_UCHE_CACHE_MODE_CONTROL_REG, 0x00000001);
+ 
+ 	/* Enable Clock gating: */
+-	if (adreno_is_a305b(adreno_gpu) ||
++	if (adreno_is_a304(adreno_gpu) ||
++	    adreno_is_a305b(adreno_gpu) ||
+ 	    adreno_is_a306(adreno_gpu) ||
+ 	    adreno_is_a306a(adreno_gpu))
+ 		gpu_write(gpu, REG_A3XX_RBBM_CLOCK_CTL, 0xaaaaaaaa);
+@@ -340,7 +344,8 @@
+ 		gpu_write(gpu, REG_A3XX_CP_PFP_UCODE_DATA, ptr[i]);
+ 
+ 	/* CP ROQ queue sizes (bytes) - RB:16, ST:16, IB1:32, IB2:64 */
+-	if (adreno_is_a305(adreno_gpu) ||
++	if (adreno_is_a304(adreno_gpu) ||
++	    adreno_is_a305(adreno_gpu) ||
+ 	    adreno_is_a306(adreno_gpu) ||
+ 	    adreno_is_a306a(adreno_gpu) ||
+ 	    adreno_is_a320(adreno_gpu)) {
+@@ -378,9 +383,11 @@
+ 	if (hang_debug)
+ 		a3xx_dump(gpu);
+ 
+-	gpu_write(gpu, REG_A3XX_RBBM_SW_RESET_CMD, 1);
+-	gpu_read(gpu, REG_A3XX_RBBM_SW_RESET_CMD);
+-	gpu_write(gpu, REG_A3XX_RBBM_SW_RESET_CMD, 0);
++	if (!adreno_is_a304(to_adreno_gpu(gpu))) {
++		gpu_write(gpu, REG_A3XX_RBBM_SW_RESET_CMD, 1);
++		gpu_read(gpu, REG_A3XX_RBBM_SW_RESET_CMD);
++		gpu_write(gpu, REG_A3XX_RBBM_SW_RESET_CMD, 0);
++	}
+ 	adreno_recover(gpu);
+ }
+ 
+--- a/drivers/gpu/drm/msm/adreno/adreno_gpu.h
++++ b/drivers/gpu/drm/msm/adreno/adreno_gpu.h
+@@ -308,6 +308,11 @@
+ 	return adreno_is_revn(gpu, 225);
+ }
+ 
++static inline bool adreno_is_a304(const struct adreno_gpu *gpu)
++{
++	return adreno_is_revn(gpu, 304);
++}
++
+ static inline bool adreno_is_a305(const struct adreno_gpu *gpu)
+ {
+ 	return adreno_is_revn(gpu, 305);
+--- a/drivers/gpu/drm/msm/adreno/adreno_device.c
++++ b/drivers/gpu/drm/msm/adreno/adreno_device.c
+@@ -264,7 +264,12 @@
+ 	if (ret)
+ 		return ret;
+ 
+-	if (of_device_is_compatible(pdev->dev.of_node, "amd,imageon"))
++	/*
++	 * Render-only GPU: i.MX5 has no MDP at all; MSM8909's MDP3 has no
++	 * mainline driver, so its display stays on simple-framebuffer.
++	 */
++	if (of_device_is_compatible(pdev->dev.of_node, "amd,imageon") ||
++	    of_property_read_bool(pdev->dev.of_node, "qcom,gpu-headless"))
+ 		adreno_device_register_headless();
+ 
+ 	return 0;
+--- a/arch/arm/boot/dts/qcom/qcom-msm8909.dtsi
++++ b/arch/arm/boot/dts/qcom/qcom-msm8909.dtsi
+@@ -1019,6 +1019,71 @@
+ 			status = "disabled";
+ 		};
+ 
++		gpu: gpu@1c00000 {
++			compatible = "qcom,adreno-304.0", "qcom,adreno";
++			reg = <0x01c00000 0x10000>;
++			reg-names = "kgsl_3d0_reg_memory";
++			interrupts = <GIC_SPI 33 IRQ_TYPE_LEVEL_HIGH>;
++			interrupt-names = "kgsl_3d0_irq";
++			clocks = <&gcc GCC_OXILI_GFX3D_CLK>,
++				 <&gcc GCC_OXILI_AHB_CLK>,
++				 <&gcc GCC_BIMC_GFX_CLK>,
++				 <&gcc GCC_BIMC_GPU_CLK>,
++				 <&gcc GCC_GTCU_AHB_CLK>,
++				 <&gcc GFX3D_CLK_SRC>;
++			clock-names = "core", "iface", "mem_iface",
++				      "alt_mem_iface", "gtcu_iface", "gfx3d";
++			power-domains = <&gcc OXILI_GDSC>;
++			operating-points-v2 = <&gpu_opp_table>;
++			iommus = <&gpu_iommu 1>, <&gpu_iommu 2>;
++			status = "disabled";
++
++			/* Lenovo/Qualcomm downstream pwrlevels */
++			gpu_opp_table: opp-table {
++				compatible = "operating-points-v2";
++
++				opp-409600000 {
++					opp-hz = /bits/ 64 <409600000>;
++				};
++				opp-307200000 {
++					opp-hz = /bits/ 64 <307200000>;
++				};
++				opp-200000000 {
++					opp-hz = /bits/ 64 <200000000>;
++				};
++				opp-19200000 {
++					opp-hz = /bits/ 64 <19200000>;
++				};
++			};
++		};
++
++		gpu_iommu: iommu@1f08000 {
++			#address-cells = <1>;
++			#size-cells = <1>;
++			#iommu-cells = <1>;
++			compatible = "qcom,msm8916-iommu", "qcom,msm-iommu-v1";
++			ranges = <0 0x01f08000 0x10000>;
++			clocks = <&gcc GCC_SMMU_CFG_CLK>,
++				 <&gcc GCC_GFX_TCU_CLK>;
++			clock-names = "iface", "bus";
++			qcom,iommu-secure-id = <18>;
++			status = "disabled";
++
++			/* GFX3D_USER */
++			iommu-ctx@1000 {
++				compatible = "qcom,msm-iommu-v1-ns";
++				reg = <0x1000 0x1000>;
++				interrupts = <GIC_SPI 241 IRQ_TYPE_LEVEL_HIGH>;
++			};
++
++			/* GFX3D_PRIV */
++			iommu-ctx@2000 {
++				compatible = "qcom,msm-iommu-v1-ns";
++				reg = <0x2000 0x1000>;
++				interrupts = <GIC_SPI 242 IRQ_TYPE_LEVEL_HIGH>;
++			};
++		};
++
+ 		blsp_dma: dma-controller@7884000 {
+ 			compatible = "qcom,bam-v1.7.0";
+ 			reg = <0x07884000 0x23000>;
+--- a/arch/arm/boot/dts/qcom/qcom-msm8909-lenovo-lxf-p5100.dts
++++ b/arch/arm/boot/dts/qcom/qcom-msm8909-lenovo-lxf-p5100.dts
+@@ -323,6 +323,19 @@
+ 	};
+ };
+ 
++/*
++ * Adreno 304 as a render-only GPU: MSM8909's display engine (MDP3) has no
++ * mainline driver, so the panel stays on lk2nd's simple-framebuffer.
++ */
++&gpu {
++	qcom,gpu-headless;
++	status = "okay";
++};
++
++&gpu_iommu {
++	status = "okay";
++};
++
+ &blsp_uart1 {
+ 	status = "okay";
+ };
