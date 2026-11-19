@@ -92,7 +92,8 @@ jobs:
             sed -i 's/^prepare() {$/prepare() {\n\tdefault_prepare/' "$DEST/APKBUILD"
           fi
           sed -n '/^prepare() {/,/^}/p' "$DEST/APKBUILD"
-          grep -q 'default_prepare' "$DEST/APKBUILD"
+          # No prepare() at all means abuild's default runs, which applies *.patch.
+          if grep -q '^prepare() {' "$DEST/APKBUILD"; then grep -q 'default_prepare' "$DEST/APKBUILD"; fi
 
       - name: Build gnome-software for armv7
         run: |
