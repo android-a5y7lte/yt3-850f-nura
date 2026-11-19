@@ -1,8 +1,9 @@
 #!/bin/sh
 # Find the two AW8736 speaker-amp enable GPIOs, one pin at a time.
 # Plays a tone straight to the codec (PulseAudio paused), raises one GPIO,
-# asks whether the speakers play, then drives it LOW again so nothing stays
-# switched on (a released line keeps its last level on this SoC).
+# asks whether the speakers play, then switches it back to INPUT (the boot
+# state) so nothing stays on. Never drives a pin low: on this board one of
+# these pins is a power-hold line and pulling it low switches the tablet off.
 # Usage: sudo yt3-amp-search [pins...]   (default: the free pins in 0..38)
 
 set -u
@@ -14,10 +15,8 @@ c 'RX1 MIX1 INP1' RX1; c 'RX2 MIX1 INP1' RX2; c 'RDAC2 MUX' RX2
 c 'HPHL' Switch; c 'HPHR' Switch
 c 'RX1 Digital Volume' 84; c 'RX2 Digital Volume' 84
 
-low() { timeout 0.3 gpioset -c gpiochip0 "$1=0" 2>/dev/null; }
-
-# Start with every candidate low, so only the pin under test is on.
-for p in $PINS; do low "$p"; done
+# Back to input: gpioget requests the line as an input and releases it.
+release() { gpioget -c gpiochip0 "$1" >/dev/null 2>&1; }
 
 # PulseAudio suspends an idle card after a few seconds, so the codec is
 # free: play straight to it as root (stop anything playing first).
@@ -39,7 +38,7 @@ for p in $PINS; do
 	printf 'speakers playing? [y/n] '
 	read -r ans
 	wait 2>/dev/null
-	low "$p"
+	release "$p"
 	case "$ans" in y*|Y*) FOUND="$FOUND $p"; echo "  -> GPIO $p noted";; esac
 done
 echo "Speaker GPIOs:${FOUND:- none}"
