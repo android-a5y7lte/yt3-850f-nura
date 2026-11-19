@@ -1,0 +1,268 @@
+iio: light: add ELAN EPL2102 ambient light sensor driver; enable it on lxf-p5100
+
+--- /dev/null
++++ b/drivers/iio/light/epl2102.c
+@@ -0,0 +1,216 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * ELAN EPL2102 ambient light sensor (ALS part only).
++ *
++ * Register protocol and measurement sequence follow the vendor driver
++ * (elan_epl2182_ps_dyn.c in Lenovo's lxf_p5x00 kernel): every transfer
++ * starts with a command byte (reg << 3) | count, where count 0 = one byte
++ * and 1 = two bytes; a register write sends [command, value], a read sends
++ * [command] and then receives the data. In single-shot sensing mode the
++ * chip measures once after each START_RUN, so a read triggers a conversion,
++ * waits for it and reads the 16-bit result from register 0x10.
++ */
++#include <linux/delay.h>
++#include <linux/i2c.h>
++#include <linux/iio/iio.h>
++#include <linux/module.h>
++#include <linux/mod_devicetable.h>
++#include <linux/mutex.h>
++#include <linux/regulator/consumer.h>
++
++#define EPL_REG_MODE		0x00
++#define EPL_REG_TIMING		0x01
++#define EPL_REG_CTRL		0x07
++#define EPL_REG_INT		0x09
++#define EPL_REG_GO_MID		0x0a
++#define EPL_REG_GO_LOW		0x0b
++#define EPL_REG_ALS_DATA	0x10
++
++#define EPL_CMD(reg, two_bytes)	(((reg) << 3) | ((two_bytes) ? 1 : 0))
++
++/* Single-shot sensing, 8x averaging, ALS mode, auto gain. */
++#define EPL_MODE_ALS		((1 << 4) | (3 << 5) | (0 << 2) | 2)
++/* Integration time step 12 (Lenovo's tuning), 1x persistence, 10-bit ADC. */
++#define EPL_TIMING_ALS		((12 << 4) | (0 << 2) | 1)
++#define EPL_INT_DISABLE		0x02
++#define EPL_GO_DEFAULT		0x3e
++#define EPL_CTRL_RESET		0x00
++#define EPL_CTRL_START		0x04
++#define EPL_CTRL_POWER_DOWN	0x06
++
++/* Conversion time the vendor driver waits after START_RUN. */
++#define EPL_ALS_DELAY_MS	100
++
++/* Lenovo: lux = raw * 440 / 1000 * 15 / 100 = raw * 0.066 */
++#define EPL_LUX_SCALE_MICRO	66000
++
++struct epl2102 {
++	struct i2c_client *client;
++	struct mutex lock;
++};
++
++static int epl2102_write(struct i2c_client *client, u8 reg, u8 val)
++{
++	u8 buf[2] = { EPL_CMD(reg, false), val };
++	int ret;
++
++	ret = i2c_master_send(client, buf, sizeof(buf));
++	if (ret < 0)
++		return ret;
++	return ret == sizeof(buf) ? 0 : -EIO;
++}
++
++static int epl2102_read16(struct i2c_client *client, u8 reg, u16 *val)
++{
++	u8 cmd = EPL_CMD(reg, true);
++	u8 buf[2];
++	int ret;
++
++	ret = i2c_master_send(client, &cmd, 1);
++	if (ret < 0)
++		return ret;
++	ret = i2c_master_recv(client, buf, sizeof(buf));
++	if (ret < 0)
++		return ret;
++	if (ret != sizeof(buf))
++		return -EIO;
++
++	*val = buf[0] | (buf[1] << 8);
++	return 0;
++}
++
++static int epl2102_measure(struct epl2102 *data, u16 *raw)
++{
++	struct i2c_client *client = data->client;
++	int ret;
++
++	ret = epl2102_write(client, EPL_REG_INT, EPL_INT_DISABLE);
++	if (!ret)
++		ret = epl2102_write(client, EPL_REG_MODE, EPL_MODE_ALS);
++	if (!ret)
++		ret = epl2102_write(client, EPL_REG_TIMING, EPL_TIMING_ALS);
++	if (!ret)
++		ret = epl2102_write(client, EPL_REG_GO_MID, EPL_GO_DEFAULT);
++	if (!ret)
++		ret = epl2102_write(client, EPL_REG_GO_LOW, EPL_GO_DEFAULT);
++	if (!ret)
++		ret = epl2102_write(client, EPL_REG_CTRL, EPL_CTRL_RESET);
++	if (!ret)
++		ret = epl2102_write(client, EPL_REG_CTRL, EPL_CTRL_START);
++	if (ret)
++		return ret;
++
++	msleep(EPL_ALS_DELAY_MS);
++
++	return epl2102_read16(client, EPL_REG_ALS_DATA, raw);
++}
++
++static int epl2102_read_raw(struct iio_dev *indio_dev,
++			    struct iio_chan_spec const *chan,
++			    int *val, int *val2, long mask)
++{
++	struct epl2102 *data = iio_priv(indio_dev);
++	u16 raw;
++	int ret;
++
++	switch (mask) {
++	case IIO_CHAN_INFO_RAW:
++		mutex_lock(&data->lock);
++		ret = epl2102_measure(data, &raw);
++		mutex_unlock(&data->lock);
++		if (ret)
++			return ret;
++		*val = raw;
++		return IIO_VAL_INT;
++	case IIO_CHAN_INFO_SCALE:
++		*val = 0;
++		*val2 = EPL_LUX_SCALE_MICRO;
++		return IIO_VAL_INT_PLUS_MICRO;
++	default:
++		return -EINVAL;
++	}
++}
++
++static const struct iio_chan_spec epl2102_channels[] = {
++	{
++		.type = IIO_LIGHT,
++		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW) |
++				      BIT(IIO_CHAN_INFO_SCALE),
++	},
++};
++
++static const struct iio_info epl2102_info = {
++	.read_raw = epl2102_read_raw,
++};
++
++static void epl2102_power_down(void *client)
++{
++	epl2102_write(client, EPL_REG_CTRL, EPL_CTRL_POWER_DOWN);
++}
++
++static int epl2102_probe(struct i2c_client *client)
++{
++	struct device *dev = &client->dev;
++	struct iio_dev *indio_dev;
++	struct epl2102 *data;
++	u16 raw;
++	int ret;
++
++	ret = devm_regulator_get_enable_optional(dev, "vdd");
++	if (ret && ret != -ENODEV)
++		return dev_err_probe(dev, ret, "failed to enable vdd\n");
++	ret = devm_regulator_get_enable_optional(dev, "vio");
++	if (ret && ret != -ENODEV)
++		return dev_err_probe(dev, ret, "failed to enable vio\n");
++
++	indio_dev = devm_iio_device_alloc(dev, sizeof(*data));
++	if (!indio_dev)
++		return -ENOMEM;
++
++	data = iio_priv(indio_dev);
++	data->client = client;
++	mutex_init(&data->lock);
++
++	/* One measurement up front: proves the chip answers this protocol. */
++	ret = epl2102_measure(data, &raw);
++	if (ret)
++		return dev_err_probe(dev, ret, "no response from sensor\n");
++	dev_info(dev, "EPL2102 ambient light sensor, initial raw %u\n", raw);
++
++	ret = devm_add_action_or_reset(dev, epl2102_power_down, client);
++	if (ret)
++		return ret;
++
++	indio_dev->name = "epl2102";
++	indio_dev->info = &epl2102_info;
++	indio_dev->channels = epl2102_channels;
++	indio_dev->num_channels = ARRAY_SIZE(epl2102_channels);
++	indio_dev->modes = INDIO_DIRECT_MODE;
++
++	return devm_iio_device_register(dev, indio_dev);
++}
++
++static const struct of_device_id epl2102_of_match[] = {
++	{ .compatible = "elan,epl2102" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, epl2102_of_match);
++
++static const struct i2c_device_id epl2102_id[] = {
++	{ "epl2102" },
++	{ }
++};
++MODULE_DEVICE_TABLE(i2c, epl2102_id);
++
++static struct i2c_driver epl2102_driver = {
++	.driver = {
++		.name = "epl2102",
++		.of_match_table = epl2102_of_match,
++	},
++	.probe = epl2102_probe,
++	.id_table = epl2102_id,
++};
++module_i2c_driver(epl2102_driver);
++
++MODULE_DESCRIPTION("ELAN EPL2102 ambient light sensor driver");
++MODULE_LICENSE("GPL");
+--- a/drivers/iio/light/Kconfig
++++ b/drivers/iio/light/Kconfig
+@@ -209,6 +209,16 @@
+ 	  To compile this driver as a module, choose M here:
+ 	  the module will be called cros_ec_light_prox.
+ 
++config EPL2102
++	tristate "ELAN EPL2102 ambient light sensor"
++	depends on I2C
++	help
++	  Say Y here to build a driver for the ambient light sensor part of
++	  the ELAN EPL2102 (found e.g. in the Lenovo Yoga Tab 3).
++
++	  To compile this driver as a module, choose M here: the module will
++	  be called epl2102.
++
+ config GP2AP002
+ 	tristate "Sharp GP2AP002 Proximity/ALS sensor"
+ 	depends on I2C
+--- a/drivers/iio/light/Makefile
++++ b/drivers/iio/light/Makefile
+@@ -22,6 +22,7 @@
+ obj-$(CONFIG_CM3605)		+= cm3605.o
+ obj-$(CONFIG_CM36651)		+= cm36651.o
+ obj-$(CONFIG_IIO_CROS_EC_LIGHT_PROX) += cros_ec_light_prox.o
++obj-$(CONFIG_EPL2102)		+= epl2102.o
+ obj-$(CONFIG_GP2AP002)		+= gp2ap002.o
+ obj-$(CONFIG_GP2AP020A00F)	+= gp2ap020a00f.o
+ obj-$(CONFIG_HID_SENSOR_ALS)	+= hid-sensor-als.o
+--- a/arch/arm/boot/dts/qcom/qcom-msm8909-lenovo-lxf-p5100.dts
++++ b/arch/arm/boot/dts/qcom/qcom-msm8909-lenovo-lxf-p5100.dts
+@@ -165,7 +165,14 @@
+ 
+ &blsp_i2c1 {
+ 	status = "okay";
+-	/* ELAN EPL2102 light sensor (0x49) has no mainline driver yet. */
++	/* ELAN EPL2102 ambient light sensor (driver: drivers/iio/light/epl2102.c) */
++	light-sensor@49 {
++		compatible = "elan,epl2102";
++		reg = <0x49>;
++		vdd-supply = <&pm8909_l17>;
++		vio-supply = <&pm8909_l6>;
++	};
++
+ 
+ 	/* Bosch BMA223: chip id 0xF8, same as BMA222E; polled (no IRQ wired). */
+ 	accelerometer@18 {

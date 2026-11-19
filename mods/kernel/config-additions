@@ -17,3 +17,5 @@ CONFIG_BMC150_ACCEL_I2C=m
 CONFIG_AK8975=m
 # Camera module power for sensor identification (mods/kernel/0003)
 CONFIG_YT3_CAM_POWER=m
+# ELAN EPL2102 ambient light sensor (mods/kernel/0006)
+CONFIG_EPL2102=m
