@@ -1,0 +1,120 @@
+name: Build patched gnome-software (32-bit ARM startup crash fix)
+
+# GNOME Software 51.1 segfaults at startup on 32-bit ARM: GsAppQuery's
+# dedupe-flags property collects a 32-bit flags value from varargs while every
+# caller passes the 64-bit GsAppListFilterFlags enum. mods/gnome-software/
+# makes the property a guint64, as gs-app-list.h already says it should be.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  DEVICE: lenovo-lxf-p5100
+  UI: phosh
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host setup
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq git python3 openssl xz-utils zstd
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+
+      - name: Install pmbootstrap
+        run: |
+          git clone --depth 1 https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git ~/pmbootstrap
+          mkdir -p ~/.local/bin
+          ln -s ~/pmbootstrap/pmbootstrap.py ~/.local/bin/pmbootstrap
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Configure
+        run: |
+          yes "" | pmbootstrap init || true
+          pmbootstrap config device "$DEVICE"
+          pmbootstrap config ui "$UI"
+
+      - name: Prepare patched gnome-software aport
+        run: |
+          set -euxo pipefail
+          PMAPORTS="$(pmbootstrap config aports | tail -1)"
+          # Use pmaports' own gnome-software aport if it has one; otherwise
+          # Alpine's community/gnome-software.
+          DEST="$(find "$PMAPORTS" -path '*/gnome-software/APKBUILD' -not -path '*/temp/*' | head -1 | xargs -r dirname)"
+          if [ -z "$DEST" ]; then
+            git clone -q --depth 1 --filter=blob:none --sparse https://github.com/alpinelinux/aports.git aports
+            (cd aports && git sparse-checkout set community/gnome-software)
+            DEST="$PMAPORTS/temp/gnome-software"
+            rm -rf "$DEST"; mkdir -p "$DEST"
+            cp -r aports/community/gnome-software/. "$DEST/"
+          fi
+          [ -d "$DEST" ] || { echo "no gnome-software aport"; exit 1; }
+          echo "Using aport: $DEST"; echo "$DEST" > /tmp/gs-aport
+          cp mods/gnome-software/0100-app-query-dedupe-flags-uint64.patch "$DEST/"
+          cd "$DEST"
+          grep -E '^(pkgver|pkgrel)=' APKBUILD
+          # Stay ahead of the archive's gnome-software so apk won't swap ours back.
+          sed -i 's/^pkgrel=.*/pkgrel=100/' APKBUILD
+          # LTO under emulation is very slow and buys little here.
+          sed -i 's/-Db_lto=true/-Db_lto=false/' APKBUILD
+          # Its test suite needs a full EGL/xvfb setup; not useful under emulation.
+          echo 'options="$options !check"' >> APKBUILD
+          python3 - <<'PY'
+          import re
+          p = "APKBUILD"
+          s = open(p).read()
+          m = re.search(r'^source="([^"]*)"', s, re.M)
+          assert m, "no source= line"
+          new = 'source="' + m.group(1).rstrip() + '\n\t0100-app-query-dedupe-flags-uint64.patch\n\t"'
+          s = s[:m.start()] + new + s[m.end():]
+          open(p, "w").write(s)
+          PY
+          grep -n -A6 '^source=' APKBUILD
+          grep -n "prepare()\|default_prepare" APKBUILD || echo "(no custom prepare: abuild's default applies *.patch)"
+          pmbootstrap checksum gnome-software
+
+      - name: Show the aport and make sure our patch is applied
+        run: |
+          set -euxo pipefail
+          DEST="$(cat /tmp/gs-aport)"
+          cat "$DEST/APKBUILD"
+          # abuild's default_prepare applies the *.patch files from source=.
+          # A custom prepare() that doesn't call it would silently skip ours.
+          if ! grep -q 'default_prepare' "$DEST/APKBUILD"; then
+            sed -i 's/^prepare() {$/prepare() {\n\tdefault_prepare/' "$DEST/APKBUILD"
+          fi
+          sed -n '/^prepare() {/,/^}/p' "$DEST/APKBUILD"
+          grep -q 'default_prepare' "$DEST/APKBUILD"
+
+      - name: Build gnome-software for armv7
+        run: |
+          pmbootstrap -y build --arch armv7 --force gnome-software
+
+      - name: Collect package
+        run: |
+          set -eux
+          mkdir -p out
+          find ~/.local/var/pmbootstrap/packages -path '*armv7*' -name 'gnome-software*-r100.apk' -exec cp {} out/ \;
+          ls -la out/
+          test -n "$(ls out/*.apk)"
+          sha256sum out/*.apk | tee out/SHA256SUMS.txt
+
+      - name: Show log tail on failure
+        if: failure()
+        run: tail -n 250 ~/.local/var/pmbootstrap/log.txt || true
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="gnome-software-arm32fix-$(date +%Y%m%d-%H%M)"
+          gh release create "$TAG" out/* --title "GNOME Software with the 32-bit ARM startup crash fixed (armv7)" \
+            --notes "Install on the tablet: sudo apk add --allow-untrusted ./gnome-software*-r100.apk"

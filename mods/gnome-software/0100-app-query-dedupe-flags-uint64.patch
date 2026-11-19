@@ -1,0 +1,45 @@
+From: Claude <noreply@anthropic.com>
+Subject: [PATCH] gs-app-query: make dedupe-flags a guint64 property
+
+GsAppListFilterFlags is 64 bits (MASK = G_MAXUINT64, static-asserted in
+gs-app-list.h, "All the properties which use GsAppListFilterFlags are
+guint64s"), but GsAppQuery:dedupe-flags was a g_param_spec_flags, which
+collects a 32-bit int from varargs. Callers pass the 64-bit enum, so on
+32-bit ARM (8-byte aligned va_arg) g_object_new_valist reads the padding
+as the value and the low word as the next property name, crashing
+gs_overview_page_load() at startup.
+---
+diff --git a/lib/gs-app-query.c b/lib/gs-app-query.c
+index c7df7ad..24ce78e 100644
+--- a/lib/gs-app-query.c
++++ b/lib/gs-app-query.c
+@@ -251,7 +251,7 @@ gs_app_query_get_property (GObject    *object,
+ 		g_value_set_uint (value, self->max_results);
+ 		break;
+ 	case PROP_DEDUPE_FLAGS:
+-		g_value_set_flags (value, self->dedupe_flags);
++		g_value_set_uint64 (value, self->dedupe_flags);
+ 		break;
+ 	case PROP_SORT_FUNC:
+ 		g_value_set_pointer (value, self->sort_func);
+@@ -358,7 +358,7 @@ gs_app_query_set_property (GObject      *object,
+ 	case PROP_DEDUPE_FLAGS:
+ 		/* Construct only. */
+ 		g_assert (self->dedupe_flags == 0);
+-		self->dedupe_flags = g_value_get_flags (value);
++		self->dedupe_flags = g_value_get_uint64 (value);
+ 		break;
+ 	case PROP_SORT_FUNC:
+ 		/* Construct only. */
+@@ -604,9 +604,9 @@ gs_app_query_class_init (GsAppQueryClass *klass)
+ 	 * Since: 43
+ 	 */
+ 	props[PROP_DEDUPE_FLAGS] =
+-		g_param_spec_flags ("dedupe-flags", "Dedupe Flags",
++		g_param_spec_uint64 ("dedupe-flags", "Dedupe Flags",
+ 				    "Flags to specify how to deduplicate the returned apps, if at all.",
+-				    GS_TYPE_APP_LIST_FILTER_FLAGS, GS_APP_LIST_FILTER_FLAG_NONE,
++				    0, G_MAXUINT64, GS_APP_LIST_FILTER_FLAG_NONE,
+ 				    G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY |
+ 				    G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
+ 
