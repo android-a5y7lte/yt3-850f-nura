@@ -1,0 +1,2 @@
+# BMA223 on the lxf-p5x00 board: Y (long axis) is mounted reversed; Z flipped to keep a right-handed frame. Tested on device.
+SUBSYSTEM=="iio", ATTR{name}=="bma222e", ENV{ACCEL_MOUNT_MATRIX}="1, 0, 0; 0, -1, 0; 0, 0, -1"
