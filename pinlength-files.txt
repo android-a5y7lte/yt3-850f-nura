@@ -1,0 +1,6 @@
+./NEWS
+./tools/phosh-pin-tool/src/main.rs
+./debian/changelog
+./src/lockscreen.c
+./src/lockscreen-manager.c
+./src/user-manager.c
