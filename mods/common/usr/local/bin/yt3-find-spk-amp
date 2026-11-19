@@ -49,7 +49,7 @@ while [ "$n" -le "$LAST" ]; do
 	printf 'GPIO %3s ... ' "$n"
 	if [ "$V" = 2 ]; then
 		timeout "$HOLD" gpioset -c gpiochip0 "$n=1" 2>/tmp/yt3-gpio.err
-		rc=$?; [ "$rc" = 124 ] && rc=0
+		rc=$?; case "$rc" in 124|143) rc=0;; esac
 	else
 		gpioset --mode=time --usec=1500000 gpiochip0 "$n=1" 2>/tmp/yt3-gpio.err
 		rc=$?
