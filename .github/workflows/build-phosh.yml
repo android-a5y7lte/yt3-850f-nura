@@ -101,11 +101,10 @@ jobs:
 
       - name: Build phosh for armv7
         run: |
-          # systemd 262 (pmOS systemd-edge) fails to install into a fresh armv7
-          # build chroot: "failed to commit usr/sbin/init: No such file or
-          # directory". Create the directories it expects first.
-          pmbootstrap -y chroot -b armv7 -- mkdir -p /usr/sbin /usr/bin /usr/lib || true
-          pmbootstrap -y chroot -b armv7 -- ls -la /usr/ || true
+          # apk-tools 3.0.10 bug (alpine/apk-tools#11231) breaks installing systemd 262
+          # into a fresh chroot; use apk.static 3.0.9 instead.
+          pmbootstrap -y chroot -- true
+          bash scripts/pin-apk-static.sh
           pmbootstrap -y build --lax --arch armv7 --force phosh
 
       - name: Collect package

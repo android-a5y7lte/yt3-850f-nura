@@ -131,6 +131,9 @@ jobs:
 
       - name: Build image
         run: |
+          # apk-tools 3.0.10 bug (alpine/apk-tools#11231): use apk.static 3.0.9
+          pmbootstrap -y chroot -- true
+          bash scripts/pin-apk-static.sh
           pmbootstrap -y install --password "$PMOS_PASSWORD" --no-sparse || {
             WORK="$(pmbootstrap config work | tail -1)"
             echo "=== apk errors ==="; grep -n -iE "error|failed to|warning" "$WORK/log.txt" | grep -v "Failed to enable unit" | head -60
