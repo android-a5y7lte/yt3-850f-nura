@@ -131,7 +131,12 @@ jobs:
 
       - name: Build image
         run: |
-          pmbootstrap -y install --password "$PMOS_PASSWORD" --no-sparse
+          pmbootstrap -y install --password "$PMOS_PASSWORD" --no-sparse || {
+            WORK="$(pmbootstrap config work | tail -1)"
+            echo "=== pmbootstrap log (tail) ==="; tail -120 "$WORK/log.txt"
+            R="$WORK/chroot_rootfs_${DEVICE}"
+            echo "=== rootfs layout ==="; sudo ls -la "$R" "$R/usr" 2>&1 | head -60
+            exit 1; }
           echo "--- our packages in the image ---"
           pmbootstrap chroot -r -- apk list --installed 2>/dev/null | grep -E -- '-r100 ' || true
 
