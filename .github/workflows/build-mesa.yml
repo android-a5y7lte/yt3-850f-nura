@@ -1,0 +1,92 @@
+name: Build Mesa libgallium with Adreno 304 (freedreno)
+
+# Mesa's freedreno refuses the YT3-850F's GPU: "unsupported GPU id 0x130 /
+# chip id 0x3000400". The A304 is a cut-down A305/A306, so we add it to the
+# a3xx list in freedreno_devices.py. Built from Alpine's own mesa aport
+# (same version + options as the tablet), but only the gallium drivers this
+# tablet can use (freedreno, softpipe, llvmpipe), no Vulkan/OpenCL/video, so it
+# finishes under qemu. Ship only libgallium-<ver>.so, which is where all
+# gallium drivers live; EGL/GBM/GLES front-ends stay Alpine's.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm
+
+      - name: Get Alpine's mesa aport
+        run: |
+          set -eux
+          git clone -q --depth 1 --filter=blob:none --sparse https://github.com/alpinelinux/aports.git aports
+          (cd aports && git sparse-checkout set main/mesa)
+          grep -E '^(pkgver|pkgrel)=' aports/main/mesa/APKBUILD
+          sed -n '/^build()/,/^}/p' aports/main/mesa/APKBUILD
+
+      - name: Build in Alpine edge armv7
+        run: |
+          set -eux
+          mkdir -p out
+          cat > meson-wrap <<'EOF'
+          #!/bin/sh
+          # drop driver/feature options we don't build, then add ours
+          args=""
+          for a in "$@"; do
+            case "$a" in
+              -Dgallium-drivers=*|-Dvulkan-drivers=*|-Dgallium-rusticl=*|-Dvideo-codecs=*|-Dgallium-va=*|-Dvulkan-layers=*|-Dtools=*|-Dintel-*|-Damd-*|-Dfreedreno-kmds=*|-Dvulkan-beta=*|-Dgallium-mediafoundation=*) ;;
+              *) args="$args '$a'" ;;
+            esac
+          done
+          eval set -- $args
+          echo "abuild-meson $* -Dgallium-drivers=freedreno,softpipe,llvmpipe -Dvulkan-drivers= -Dgallium-rusticl=false -Dvideo-codecs= -Dgallium-va=disabled -Dtools=" >&2
+          exec /usr/bin/abuild-meson.real "$@" -Dgallium-drivers=freedreno,softpipe,llvmpipe -Dvulkan-drivers= -Dgallium-rusticl=false -Dvideo-codecs= -Dgallium-va=disabled -Dtools=
+          EOF
+          chmod +x meson-wrap
+          docker run --rm --platform linux/arm/v7 \
+            -v "$PWD/aports/main/mesa:/src" -v "$PWD/out:/out" -v "$PWD/meson-wrap:/meson-wrap" \
+            alpine:edge sh -euxc '
+              apk add --no-cache alpine-sdk sudo python3
+              mv /usr/bin/abuild-meson /usr/bin/abuild-meson.real && cp /meson-wrap /usr/bin/abuild-meson
+              adduser -D b && addgroup b abuild && echo "b ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/b
+              cp -r /src /home/b/mesa && chown -R b:b /home/b/mesa
+              su b -c "abuild-keygen -a -n -i"
+              cd /home/b/mesa
+              su b -c "abuild deps && abuild fetch unpack prepare"
+              f=$(find src -path "*freedreno/common/freedreno_devices.py" | head -1)
+              python3 - "$f" <<PY
+          import sys, re
+          p = sys.argv[1]; s = open(p).read()
+          i = s.find("GPUId(305)")
+          assert i > 0, "a3xx GPUId(305) not found"
+          line_start = s.rfind("\n", 0, i) + 1
+          indent = s[line_start:i]
+          s = s[:line_start] + indent + "GPUId(304),\n" + s[line_start:]
+          open(p, "w").write(s)
+          print(s[line_start-200:line_start+300])
+          PY
+              su b -c "abuild build"
+              ver=$(. ./APKBUILD; echo $pkgver)
+              find src -name "libgallium-*.so" -type f -exec cp {} /out/ \;
+              echo "$ver" > /out/MESA_VERSION
+            '
+          ls -la out
+          test -n "$(ls out/libgallium-*.so)"
+          sha256sum out/* | tee out/SHA256SUMS.txt
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="mesa-a304-$(cat out/MESA_VERSION)-$(date +%Y%m%d-%H%M)"
+          gh release create "$TAG" out/* --title "Mesa $(cat out/MESA_VERSION) libgallium with Adreno 304 (armv7)" \
+            --notes "Replace /usr/lib/libgallium-$(cat out/MESA_VERSION).so on the tablet (mesa must be exactly $(cat out/MESA_VERSION))."
