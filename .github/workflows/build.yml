@@ -137,7 +137,7 @@ jobs:
           pmbootstrap -y install --password "$PMOS_PASSWORD" --no-sparse || {
             WORK="$(pmbootstrap config work | tail -1)"
             echo "=== apk errors ==="; grep -n -iE "error|failed to|warning" "$WORK/log.txt" | grep -v "Failed to enable unit" | head -60
-            echo "=== apk wrapper ==="; cat /tmp/yt3-apk-wrapper.log || true
+            echo "=== apk wrapper ==="; cat /tmp/yt3-apk-wrapper-*.log || true
             echo "=== before failure ==="; grep -n "Command failed" "$WORK/log.txt" | head -1
             n=$(grep -n "Command failed" "$WORK/log.txt" | head -1 | cut -d: -f1); sed -n "$((n-60)),${n}p" "$WORK/log.txt" | grep -v "^(.*) Installing\|Upgrading"
             echo "=== init ==="; sudo ls -la "$WORK/chroot_rootfs_${DEVICE}/usr/bin/init" "$WORK/chroot_rootfs_${DEVICE}/usr/lib/systemd/systemd" 2>&1

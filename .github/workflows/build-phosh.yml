@@ -121,7 +121,7 @@ jobs:
       - name: Show log tail on failure
         if: failure()
         run: |
-          echo "=== apk wrapper ==="; head -3 ~/.local/var/pmbootstrap/apk.static; cat /tmp/yt3-apk-wrapper.log || true
+          echo "=== apk wrapper ==="; head -3 ~/.local/var/pmbootstrap/apk.static; cat /tmp/yt3-apk-wrapper-*.log || true
           L=~/.local/var/pmbootstrap/log.txt
           echo "=== apk/script errors ==="; grep -n -iE "ERROR:|script exited|exited with error|\.(pre|post)-(install|upgrade)" $L | tail -40 || true
           echo "=== tail ==="; tail -n 120 $L || true

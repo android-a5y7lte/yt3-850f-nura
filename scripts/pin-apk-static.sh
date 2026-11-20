@@ -16,11 +16,14 @@ sudo tee "$T" >/dev/null <<'WRAP'
 #!/bin/bash
 real="$(dirname "$0")/apk.static"
 errf=$(mktemp)
-echo "$(date +%T) $*" >> /tmp/yt3-apk-wrapper.log
+echo "$(date +%T) $*" >> /tmp/yt3-apk-wrapper-$(id -u).log
 # apk may print its errors on stdout, so watch both streams
 "$real" "$@" 2>&1 | tee "$errf"; rc=${PIPESTATUS[0]}
-if [ $rc -ne 0 ] && grep -q "failed to commit usr/\(s\)\?bin/\(init\|udevadm\)" "$errf" \
-   && ! grep "ERROR" "$errf" | grep -qv "failed to commit usr/\(s\)\?bin/\(init\|udevadm\)"; then
+# Repair when the only errors are the two known ones. A later apk run in the same
+# root can also exit non-zero without printing anything new (the package is still
+# flagged from the first failure), so "no other ERROR lines" counts too.
+if [ $rc -ne 0 ] && ! grep "ERROR" "$errf" | grep -qv "failed to commit usr/\(s\)\?bin/\(init\|udevadm\)" \
+   && grep -q "errors\?;\|failed to commit" "$errf"; then
   root=/; cache=""
   prev=""
   for a in "$@"; do
@@ -43,8 +46,8 @@ if [ $rc -ne 0 ] && grep -q "failed to commit usr/\(s\)\?bin/\(init\|udevadm\)" 
   ls -la "$root/usr/bin/init" "$root/usr/bin/udevadm" >&2 || true
   rc=0
 fi
-echo "  rc=$rc errors: $(grep -c ERROR "$errf")" >> /tmp/yt3-apk-wrapper.log
-grep ERROR "$errf" >> /tmp/yt3-apk-wrapper.log || true
+echo "  rc=$rc errors: $(grep -c ERROR "$errf")" >> /tmp/yt3-apk-wrapper-$(id -u).log
+grep ERROR "$errf" >> /tmp/yt3-apk-wrapper-$(id -u).log || true
 rm -f "$errf"
 exit $rc
 WRAP
