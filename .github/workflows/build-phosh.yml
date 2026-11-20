@@ -102,11 +102,9 @@ jobs:
       - name: Build phosh for armv7
         run: |
           # apk-tools 3.0.10 bug (alpine/apk-tools#11231) breaks installing systemd 262
-          # into a fresh chroot; use apk.static 3.0.9 instead.
+          # into a fresh chroot; wrap apk.static to repair the two files.
           pmbootstrap -y chroot -- true
           bash scripts/pin-apk-static.sh
-          pmbootstrap -y chroot -b armv7 -- true || true
-          bash scripts/preinstall-systemd.sh buildroot_armv7 armv7
           pmbootstrap -y build --lax --arch armv7 --force phosh
 
       - name: Collect package

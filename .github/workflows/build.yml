@@ -131,7 +131,7 @@ jobs:
 
       - name: Build image
         run: |
-          # apk-tools 3.0.10 bug (alpine/apk-tools#11231): use apk.static 3.0.9
+          # apk-tools bug (alpine/apk-tools#11231): wrap apk.static to repair init/udevadm
           pmbootstrap -y chroot -- true
           bash scripts/pin-apk-static.sh
           pmbootstrap -y install --password "$PMOS_PASSWORD" --no-sparse || {

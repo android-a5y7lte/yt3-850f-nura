@@ -1,24 +1,44 @@
 #!/bin/bash
-# Work around apk-tools 3.0.10 bug (alpine/apk-tools#11231): installs fail with
-# "failed to commit usr/sbin/init / usr/bin/udevadm: No such file or directory".
-# Replace pmbootstrap's apk.static with the newest 3.0.x older than 3.0.10.
+# Work around alpine/apk-tools#11231 (seen with systemd 262 on merged /usr):
+#   ERROR: systemd-262.2-r0: failed to commit usr/sbin/init: No such file or directory
+#   ERROR: systemd-udevd-262.2-r0: failed to commit usr/bin/udevadm: No such file or directory
+# Everything else installs fine. Wrap pmbootstrap's apk.static: when those are the
+# only errors, put the two files in place ourselves and report success.
 set -euo pipefail
 WORK="$(pmbootstrap config work | tail -1)"
-tmp=$(mktemp -d)
-found=""
-for br in v3.24 v3.23 v3.22; do
-  url="https://dl-cdn.alpinelinux.org/alpine/$br/main/x86_64"
-  curl -fsSL "$url/APKINDEX.tar.gz" -o "$tmp/idx.tgz" || continue
-  ver=$(tar -xzOf "$tmp/idx.tgz" APKINDEX | awk '/^P:/{p=substr($0,3)} /^V:/{if(p=="apk-tools-static") print substr($0,3)}' | head -1)
-  echo "$br: apk-tools-static $ver"
-  case "$ver" in
-    3.0.[0-9]-r*) found="$url/apk-tools-static-$ver.apk"; break ;;
-  esac
-done
-[ -n "$found" ] || { echo "no apk-tools-static < 3.0.10 found"; exit 1; }
-curl -fsSL "$found" -o "$tmp/a.apk"
-mkdir "$tmp/x" && tar -xzf "$tmp/a.apk" -C "$tmp/x" 2>/dev/null || true
-bin=$(find "$tmp/x" -name apk.static -type f | head -1)
-[ -n "$bin" ] || { echo "apk.static not in package"; exit 1; }
-sudo install -m 755 "$bin" "$WORK/apk.static"
+[ -f "$WORK/apk.static.real" ] || sudo mv "$WORK/apk.static" "$WORK/apk.static.real"
+sudo tee "$WORK/apk.static" >/dev/null <<'WRAP'
+#!/bin/bash
+real="$(dirname "$(readlink -f "$0")")/apk.static.real"
+errf=$(mktemp)
+"$real" "$@" 2>"$errf"; rc=$?
+cat "$errf" >&2
+if [ $rc -ne 0 ] && grep -q "failed to commit usr/\(s\)\?bin/\(init\|udevadm\)" "$errf" \
+   && ! grep "ERROR" "$errf" | grep -qv "failed to commit usr/\(s\)\?bin/\(init\|udevadm\)"; then
+  root=/; cache=""
+  prev=""
+  for a in "$@"; do
+    case "$prev" in --root) root="$a";; --cache-dir) cache="$a";; esac
+    prev="$a"
+  done
+  echo "yt3 apk wrapper: repairing init/udevadm in $root" >&2
+  if [ ! -e "$root/usr/bin/init" ] && [ -e "$root/usr/lib/systemd/systemd" ]; then
+    ln -sf ../lib/systemd/systemd "$root/usr/bin/init"
+  fi
+  if [ ! -e "$root/usr/bin/udevadm" ]; then
+    pkg=$(ls -t "$cache"/systemd-udevd-[0-9]*.apk 2>/dev/null | head -1)
+    if [ -n "$pkg" ]; then
+      t=$(mktemp -d); tar -xzf "$pkg" -C "$t" 2>/dev/null || true
+      src=$(find "$t" -path "*bin/udevadm" -type f | head -1)
+      [ -n "$src" ] && install -m 755 "$src" "$root/usr/bin/udevadm"
+      rm -rf "$t"
+    fi
+  fi
+  ls -la "$root/usr/bin/init" "$root/usr/bin/udevadm" >&2 || true
+  rc=0
+fi
+rm -f "$errf"
+exit $rc
+WRAP
+sudo chmod 755 "$WORK/apk.static"
 "$WORK/apk.static" --version
