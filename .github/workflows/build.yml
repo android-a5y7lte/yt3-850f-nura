@@ -133,7 +133,8 @@ jobs:
         run: |
           pmbootstrap -y install --password "$PMOS_PASSWORD" --no-sparse || {
             WORK="$(pmbootstrap config work | tail -1)"
-            echo "=== pmbootstrap log (tail) ==="; tail -120 "$WORK/log.txt"
+            echo "=== apk errors ==="; grep -n -iE "error|failed to|warning" "$WORK/log.txt" | grep -v "Failed to enable unit" | head -60
+            echo "=== init ==="; sudo ls -la "$WORK/chroot_rootfs_${DEVICE}/usr/bin/init" "$WORK/chroot_rootfs_${DEVICE}/usr/lib/systemd/systemd" 2>&1
             R="$WORK/chroot_rootfs_${DEVICE}"
             echo "=== rootfs layout ==="; sudo ls -la "$R" "$R/usr" 2>&1 | head -60
             exit 1; }
