@@ -11,6 +11,7 @@ sudo tee "$WORK/apk.static" >/dev/null <<'WRAP'
 #!/bin/bash
 real="$(dirname "$(readlink -f "$0")")/apk.static.real"
 errf=$(mktemp)
+echo "$(date +%T) $*" >> /tmp/yt3-apk-wrapper.log
 # apk may print its errors on stdout, so watch both streams
 "$real" "$@" 2>&1 | tee "$errf"; rc=${PIPESTATUS[0]}
 if [ $rc -ne 0 ] && grep -q "failed to commit usr/\(s\)\?bin/\(init\|udevadm\)" "$errf" \
@@ -37,6 +38,8 @@ if [ $rc -ne 0 ] && grep -q "failed to commit usr/\(s\)\?bin/\(init\|udevadm\)" 
   ls -la "$root/usr/bin/init" "$root/usr/bin/udevadm" >&2 || true
   rc=0
 fi
+echo "  rc=$rc errors: $(grep -c ERROR "$errf")" >> /tmp/yt3-apk-wrapper.log
+grep ERROR "$errf" >> /tmp/yt3-apk-wrapper.log || true
 rm -f "$errf"
 exit $rc
 WRAP
