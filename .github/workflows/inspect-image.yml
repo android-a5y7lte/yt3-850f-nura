@@ -1,0 +1,24 @@
+name: Inspect built image
+on:
+  workflow_dispatch:
+    inputs:
+      run_id: {required: true}
+jobs:
+  i:
+    runs-on: ubuntu-24.04
+    steps:
+      - env: {GH_TOKEN: "${{ github.token }}"}
+        run: |
+          gh run download ${{ inputs.run_id }} -R ${{ github.repository }} -n nura-edge-yt3-850f-phosh -D img
+          cd img; ls -la; unxz lenovo-lxf-p5100-mods.img.xz
+          L=$(sudo losetup -f --show -P lenovo-lxf-p5100-mods.img); sudo mkdir -p /m; sudo mount ${L}p2 /m; sudo mount ${L}p1 /m/boot
+          R=/m
+          echo "== layout"; ls -la $R | head -30; ls -la $R/usr | head
+          echo "== init"; ls -la $R/sbin/init $R/usr/sbin/init $R/usr/bin/init $R/usr/lib/systemd/systemd 2>&1
+          echo "== udevadm"; ls -la $R/usr/bin/udevadm $R/usr/sbin/udevadm $R/usr/lib/systemd/systemd-udevd 2>&1; file $R/usr/bin/udevadm
+          echo "== shared libs"; ls -la $R/usr/lib/systemd/libsystemd-shared* $R/usr/lib/libsystemd-shared* 2>&1
+          echo "== needed by udevadm/systemd"; for b in usr/bin/udevadm usr/lib/systemd/systemd usr/lib/systemd/systemd-udevd; do echo "-- $b"; readelf -d $R/$b 2>&1 | grep NEEDED; done
+          echo "== apk installed state"; grep -A3 "^P:systemd$\|^P:systemd-udevd$" $R/lib/apk/db/installed $R/usr/lib/apk/db/installed 2>/dev/null | head -20
+          echo "== versions"; grep -h -A1 "^P:systemd" $R/usr/lib/apk/db/installed $R/lib/apk/db/installed 2>/dev/null | grep -E "^P:|^V:" | paste - - | head -30
+          echo "== cmdline / boot"; ls -la /m/boot; strings /m/boot/boot.img 2>/dev/null | grep -m3 "init=\|console=" || true
+          echo "== initramfs init target"; cat /m/boot/deviceinfo 2>/dev/null | head -5
