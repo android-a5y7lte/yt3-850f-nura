@@ -14,27 +14,20 @@ W=/tmp/yt3-restore; rm -rf $W; mkdir -p $W; cd $W
 
 step() { echo; echo "=== $*"; }
 
-step "1/7 Block the new systemd 262 (images with it don't boot)"
-SDV=$(apk info -v systemd 2>/dev/null | head -1 | sed 's/^systemd-//')
-echo "installed systemd: $SDV"
-[ -n "$SDV" ] && apk add --no-interactive "systemd=$SDV" >/dev/null && echo "systemd pinned to $SDV"
-
+step "1/7 Free space check"
+df -h / | tail -1
 step "2/7 Download our packages"
 wget -q $REL/$KERNEL/linux-postmarketos-qcom-msm8916-6.12.1-r100.apk || echo "kernel download FAILED"
 wget -q -O gs.json "https://api.github.com/repos/$REPO/releases/tags/$GSOFT"
-for u in $(grep -o '"browser_download_url": *"[^"]*\.apk"' gs.json | cut -d'"' -f4); do wget -q "$u"; done
-wget -q -O ph.json "https://api.github.com/repos/$REPO/releases/tags/$PHOSH"
-for u in $(grep -o '"browser_download_url": *"[^"]*\.apk"' ph.json | cut -d'"' -f4 | grep -E '/(phosh|libphosh|phosh-schemas|phosh-systemd|phosh-portalsconf|phosh-lang)-99990'); do wget -q "$u"; done
+for u in $(grep -o '"browser_download_url": *"[^"]*\.apk"' gs.json | cut -d'"' -f4 | grep -E '/gnome-software-(lib-|systemd-|plugin-flatpak-)?51'); do wget -q "$u"; done
+
 ls -1 *.apk
 
 step "3/7 Install kernel, App Store fix, new Phosh"
 apk add --allow-untrusted --force-overwrite --no-interactive ./linux-postmarketos-qcom-msm8916-*.apk && echo "kernel OK"
-apk add --allow-untrusted --force-overwrite --no-interactive ./gnome-software*.apk && echo "App Store fix OK"
-if apk add --allow-untrusted --force-overwrite --no-interactive ./phosh-99990*.apk ./libphosh-99990*.apk ./phosh-schemas-99990*.apk ./phosh-systemd-99990*.apk ./phosh-portalsconf-99990*.apk ./phosh-lang-99990*.apk; then
-  echo "new Phosh OK"
-else
-  echo "new Phosh needs newer system packages - skipped, the old Phosh stays (tell Claude)"
-fi
+# only upgrade the App Store pieces already installed, never add -dev/-dbg/-doc
+apk add --allow-untrusted --force-overwrite --no-interactive ./gnome-software-51*.apk ./gnome-software-lib-51*.apk ./gnome-software-systemd-51*.apk ./gnome-software-plugin-flatpak-51*.apk && echo "App Store fix OK"
+echo "new Phosh: skipped on this image (needs newer system packages)"
 
 step "4/7 Our config files (audio UCM, sensors, brightness, haptics, zram, RAM Plus, weather)"
 wget -q -O repo.tgz "https://codeload.github.com/$REPO/tar.gz/$REF" || { echo "repo download FAILED"; exit 1; }
