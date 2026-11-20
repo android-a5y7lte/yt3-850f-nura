@@ -105,6 +105,8 @@ jobs:
           # into a fresh chroot; use apk.static 3.0.9 instead.
           pmbootstrap -y chroot -- true
           bash scripts/pin-apk-static.sh
+          pmbootstrap -y chroot -b armv7 -- true || true
+          bash scripts/preinstall-systemd.sh buildroot_armv7 armv7
           pmbootstrap -y build --lax --arch armv7 --force phosh
 
       - name: Collect package
