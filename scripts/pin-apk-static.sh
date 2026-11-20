@@ -6,10 +6,13 @@
 # only errors, put the two files in place ourselves and report success.
 set -euo pipefail
 WORK="$(pmbootstrap config work | tail -1)"
-[ -f "$WORK/apk.static.real" ] || sudo mv "$WORK/apk.static" "$WORK/apk.static.real"
-sudo tee "$WORK/apk.static" >/dev/null <<'WRAP'
+# $WORK/apk.static may be a symlink into the native chroot; wrap the real file.
+T="$(readlink -f "$WORK/apk.static")"
+ls -la "$WORK/apk.static"; echo "target: $T"
+[ -f "$T.real" ] || sudo mv "$T" "$T.real"
+sudo tee "$T" >/dev/null <<'WRAP'
 #!/bin/bash
-real="$(dirname "$(readlink -f "$0")")/apk.static.real"
+real="$(readlink -f "$0").real"
 errf=$(mktemp)
 echo "$(date +%T) $*" >> /tmp/yt3-apk-wrapper.log
 # apk may print its errors on stdout, so watch both streams
@@ -43,5 +46,5 @@ grep ERROR "$errf" >> /tmp/yt3-apk-wrapper.log || true
 rm -f "$errf"
 exit $rc
 WRAP
-sudo chmod 755 "$WORK/apk.static"
+sudo chmod 755 "$T"
 "$WORK/apk.static" --version
