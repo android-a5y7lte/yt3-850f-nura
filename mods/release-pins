@@ -1,0 +1,2 @@
+# The GPU kernels (kernel-audio-20261119-2220/2254) hang the first boot at the splash.
+kernel-audio- kernel-audio-20261119-2121
