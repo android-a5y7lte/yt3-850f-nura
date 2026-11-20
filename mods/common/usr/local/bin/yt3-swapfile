@@ -1,0 +1,10 @@
+#!/bin/sh
+# "RAM Plus": 1 GB swap file on storage, used only after zram (pri 100) is full.
+F=/swapfile
+SIZE_MB=1024
+if [ ! -f "$F" ]; then
+  fallocate -l ${SIZE_MB}M "$F" 2>/dev/null || dd if=/dev/zero of="$F" bs=1M count=$SIZE_MB status=none
+  chmod 600 "$F"
+  mkswap "$F" >/dev/null
+fi
+grep -q "^$F " /proc/swaps || swapon -p 10 "$F"

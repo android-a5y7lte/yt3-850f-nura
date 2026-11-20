@@ -1,0 +1,11 @@
+[Unit]
+Description=YT3-850F: RAM Plus swap file (after zram)
+After=yt3-zram.service local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/yt3-swapfile
+
+[Install]
+WantedBy=multi-user.target
