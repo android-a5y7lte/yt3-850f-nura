@@ -14,6 +14,14 @@ modprobe yt3-cam-power 2>/dev/null
 
 # Froze or switched off the tablet when raised: never touch.
 SKIP=" 10 25 39 "
+# Also skip every pin the kernel has muxed to a device (I2C/UART/SPI...):
+# forcing an I2C line high makes the next bus scan hang.
+mount -t debugfs none /sys/kernel/debug 2>/dev/null
+PM="$(ls /sys/kernel/debug/pinctrl/*/pinmux-pins 2>/dev/null | head -1)"
+if [ -n "$PM" ]; then
+	for n in $(awk '/^pin [0-9]+ .*: device / && $0 !~ /UNCLAIMED/ {print $2}' "$PM"); do SKIP="$SKIP$n "; done
+fi
+echo "skipping:$SKIP"
 PINS="${*:-$(seq 0 116)}"
 
 scan() {
@@ -29,6 +37,7 @@ FOUND=""
 
 for p in $PINS; do
 	case "$SKIP" in *" $p "*) continue;; esac
+	printf '%s ' "$p"
 	timeout 3 gpioset -c gpiochip0 "$p=1" 2>/dev/null &
 	G=$!
 	sleep 0.8
@@ -43,7 +52,7 @@ for p in $PINS; do
 		echo "GPIO $p -> NEW I2C device(s): $NEW"
 		FOUND="$FOUND $p($NEW)"
 	else
-		printf '.'
+		:
 	fi
 done
 echo
