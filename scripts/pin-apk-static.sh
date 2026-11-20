@@ -6,13 +6,15 @@
 # only errors, put the two files in place ourselves and report success.
 set -euo pipefail
 WORK="$(pmbootstrap config work | tail -1)"
-# $WORK/apk.static may be a symlink into the native chroot; wrap the real file.
-T="$(readlink -f "$WORK/apk.static")"
-ls -la "$WORK/apk.static"; echo "target: $T"
-[ -f "$T.real" ] || sudo mv "$T" "$T.real"
+# pmbootstrap re-extracts $WORK/apk.static on every chroot init, so point its apk
+# calls at a wrapper next to it instead (patch pmb/helpers/apk.py).
+PMB=~/pmbootstrap/pmb/helpers/apk.py
+grep -q 'apk-yt3-wrapper' "$PMB" || sed -i 's#config.work / "apk.static"), "--no-progress"#config.work / "apk-yt3-wrapper"), "--no-progress"#' "$PMB"
+grep -n 'apk-yt3-wrapper' "$PMB" || { echo "could not patch pmbootstrap"; exit 1; }
+T="$WORK/apk-yt3-wrapper"
 sudo tee "$T" >/dev/null <<'WRAP'
 #!/bin/bash
-real="$(readlink -f "$0").real"
+real="$(dirname "$0")/apk.static"
 errf=$(mktemp)
 echo "$(date +%T) $*" >> /tmp/yt3-apk-wrapper.log
 # apk may print its errors on stdout, so watch both streams
@@ -47,4 +49,4 @@ rm -f "$errf"
 exit $rc
 WRAP
 sudo chmod 755 "$T"
-"$WORK/apk.static" --version
+"$T" --version
