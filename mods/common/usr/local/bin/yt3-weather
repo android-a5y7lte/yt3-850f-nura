@@ -1,0 +1,14 @@
+#!/bin/sh
+# Fetch current weather for the Phosh top-bar weather icon.
+# Writes "<temp>|<condition>" to /run/yt3-weather/now.
+# Location: auto (by IP) unless CITY is set in /etc/yt3-weather.conf, e.g. CITY=Chania
+CITY=""
+[ -r /etc/yt3-weather.conf ] && . /etc/yt3-weather.conf
+CITY=$(printf %s "$CITY" | sed 's/ /+/g')
+mkdir -p /run/yt3-weather
+chmod 755 /run/yt3-weather
+out=$(wget -q -T 20 -O - "https://wttr.in/${CITY}?format=%t|%C&m" 2>/dev/null) || exit 0
+case "$out" in
+  *"|"*) printf '%s\n' "$out" > /run/yt3-weather/now.tmp && mv /run/yt3-weather/now.tmp /run/yt3-weather/now
+         chmod 644 /run/yt3-weather/now ;;
+esac

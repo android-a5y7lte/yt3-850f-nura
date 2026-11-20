@@ -1,33 +1,23 @@
-Subject: [PATCH] YT3-850F: hide the cellular tile without a modem; network-speed status icon
+Subject: [PATCH] YT3-850F: netspeed + weather status icons, hide WWAN tile
 
 ---
---- a/plugins/meson.build
-+++ b/plugins/meson.build
-@@ -85,6 +85,7 @@
+--- a/plugins/meson.build	2026-11-19 23:57:32.039700491 +0200
++++ b/plugins/meson.build	2026-11-20 08:47:21.028576272 +0200
+@@ -85,6 +85,8 @@
  status_icon_plugins = [
    'camera-status-icon',
    'load-meter-status-icon',
 +  'netspeed-status-icon',
++  'weather-status-icon',
    'simple-custom-status-icon',
  ]
  
---- a/src/ui/quick-settings.ui
-+++ b/src/ui/quick-settings.ui
-@@ -9,7 +9,7 @@
-         <property name="spacing">6</property>
-         <child>
-           <object class="PhoshQuickSetting">
--            <property name="visible">1</property>
-+            <property name="visible" bind-source="wwaninfo" bind-property="present" bind-flags="sync-create"/>
-             <property name="sensitive" bind-source="wwaninfo" bind-property="present" bind-flags="sync-create"/>
-             <property name="status-icon">wwaninfo</property>
-             <property name="long-press-action-name">panel.launch-mobile-panel</property>
---- /dev/null
-+++ b/plugins/netspeed-status-icon/icons/netspeed-status-icon-symbolic.svg
+--- a/plugins/netspeed-status-icon/icons/netspeed-status-icon-symbolic.svg	1970-01-01 02:00:00.000000000 +0200
++++ b/plugins/netspeed-status-icon/icons/netspeed-status-icon-symbolic.svg	2026-11-19 23:57:32.053913019 +0200
 @@ -0,0 +1 @@
 +<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path fill="#2e3436" d="M4 1 1 5h2v10h2V5h2zm8 14 3-4h-2V1h-2v10H9z"/></svg>
---- /dev/null
-+++ b/plugins/netspeed-status-icon/meson.build
+--- a/plugins/netspeed-status-icon/meson.build	1970-01-01 02:00:00.000000000 +0200
++++ b/plugins/netspeed-status-icon/meson.build	2026-11-19 23:57:32.056488053 +0200
 @@ -0,0 +1,47 @@
 +name = 'netspeed-status-icon'
 +
@@ -76,8 +66,8 @@ Subject: [PATCH] YT3-850F: hide the cellular tile without a modem; network-speed
 +  'icons/netspeed-status-icon-symbolic.svg',
 +  install_dir: phosh_plugin_icon_dir,
 +)
---- /dev/null
-+++ b/plugins/netspeed-status-icon/netspeed-status-icon.c
+--- a/plugins/netspeed-status-icon/netspeed-status-icon.c	1970-01-01 02:00:00.000000000 +0200
++++ b/plugins/netspeed-status-icon/netspeed-status-icon.c	2026-11-19 23:57:32.047522454 +0200
 @@ -0,0 +1,135 @@
 +/*
 + * SPDX-License-Identifier: GPL-3.0-or-later
@@ -214,8 +204,8 @@ Subject: [PATCH] YT3-850F: hide the cellular tile without a modem; network-speed
 +  self->timeout_id = g_timeout_add_seconds (INTERVAL, on_timeout, self);
 +  on_timeout (self);
 +}
---- /dev/null
-+++ b/plugins/netspeed-status-icon/netspeed-status-icon.desktop.in.in
+--- a/plugins/netspeed-status-icon/netspeed-status-icon.desktop.in.in	1970-01-01 02:00:00.000000000 +0200
++++ b/plugins/netspeed-status-icon/netspeed-status-icon.desktop.in.in	2026-11-19 23:57:32.052616932 +0200
 @@ -0,0 +1,8 @@
 +[Plugin]
 +# Translators: This is an internal id, no need to translate it
@@ -225,8 +215,8 @@ Subject: [PATCH] YT3-850F: hide the cellular tile without a modem; network-speed
 +Comment=Live download and upload rate in the top bar.
 +Plugin=@plugins_dir@/libphosh-plugin-@name@.so
 +Icon=netspeed-status-icon
---- /dev/null
-+++ b/plugins/netspeed-status-icon/netspeed-status-icon.h
+--- a/plugins/netspeed-status-icon/netspeed-status-icon.h	1970-01-01 02:00:00.000000000 +0200
++++ b/plugins/netspeed-status-icon/netspeed-status-icon.h	2026-11-19 23:57:32.046276626 +0200
 @@ -0,0 +1,19 @@
 +/*
 + * SPDX-License-Identifier: GPL-3.0-or-later
@@ -247,8 +237,8 @@ Subject: [PATCH] YT3-850F: hide the cellular tile without a modem; network-speed
 +                      PHOSH, NETSPEED_STATUS_ICON, PhoshStatusIcon)
 +
 +G_END_DECLS
---- /dev/null
-+++ b/plugins/netspeed-status-icon/phosh-plugin-netspeed-status-icon.c
+--- a/plugins/netspeed-status-icon/phosh-plugin-netspeed-status-icon.c	1970-01-01 02:00:00.000000000 +0200
++++ b/plugins/netspeed-status-icon/phosh-plugin-netspeed-status-icon.c	2026-11-19 23:57:32.048764282 +0200
 @@ -0,0 +1,35 @@
 +/*
 + * SPDX-License-Identifier: GPL-3.0-or-later
@@ -285,8 +275,8 @@ Subject: [PATCH] YT3-850F: hide the cellular tile without a modem; network-speed
 +
 +  return g_strdupv (extension_points);
 +}
---- /dev/null
-+++ b/plugins/netspeed-status-icon/phosh-plugin-netspeed-status-icon.gresources.xml
+--- a/plugins/netspeed-status-icon/phosh-plugin-netspeed-status-icon.gresources.xml	1970-01-01 02:00:00.000000000 +0200
++++ b/plugins/netspeed-status-icon/phosh-plugin-netspeed-status-icon.gresources.xml	2026-11-19 23:57:32.051318106 +0200
 @@ -0,0 +1,6 @@
 +<?xml version="1.0" encoding="utf-8"?>
 +<gresources>
@@ -294,8 +284,8 @@ Subject: [PATCH] YT3-850F: hide the cellular tile without a modem; network-speed
 +    <file preprocess="xml-stripblanks">si.ui</file>
 +  </gresource>
 +</gresources>
---- /dev/null
-+++ b/plugins/netspeed-status-icon/si.ui
+--- a/plugins/netspeed-status-icon/si.ui	1970-01-01 02:00:00.000000000 +0200
++++ b/plugins/netspeed-status-icon/si.ui	2026-11-19 23:57:32.050042394 +0200
 @@ -0,0 +1,14 @@
 +<?xml version="1.0" encoding="UTF-8"?>
 +<interface>
@@ -311,3 +301,281 @@ Subject: [PATCH] YT3-850F: hide the cellular tile without a modem; network-speed
 +    <property name="label">↓0B ↑0B</property>
 +  </object>
 +</interface>
+--- a/plugins/weather-status-icon/icons/weather-status-icon-symbolic.svg	1970-01-01 02:00:00.000000000 +0200
++++ b/plugins/weather-status-icon/icons/weather-status-icon-symbolic.svg	2026-11-20 08:47:13.732189176 +0200
+@@ -0,0 +1 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><circle cx="6" cy="6" r="3" fill="#2e3436"/><path d="M5 15h7a3 3 0 0 0 0-6 4 4 0 0 0-7.6 1.2A2.5 2.5 0 0 0 5 15z" fill="#2e3436"/></svg>
+--- a/plugins/weather-status-icon/meson.build	1970-01-01 02:00:00.000000000 +0200
++++ b/plugins/weather-status-icon/meson.build	2026-11-20 08:47:04.981659858 +0200
+@@ -0,0 +1,47 @@
++name = 'weather-status-icon'
++
++weather_status_icon_resources = gnome.compile_resources(
++  'phosh-plugin-weather-status-icon-resources',
++  'phosh-plugin-weather-status-icon.gresources.xml',
++  c_name: 'phosh_plugin_weather_status_icon',
++)
++
++weather_status_icon_plugin_sources = files(
++  'weather-status-icon.c',
++  'phosh-plugin-weather-status-icon.c',
++)
++
++phosh_weather_status_icon_plugin = shared_module(
++  'phosh-plugin-weather-status-icon',
++  weather_status_icon_plugin_sources,
++  weather_status_icon_resources,
++  c_args: [
++    '-DG_LOG_DOMAIN="phosh-plugin-@0@"'.format(name),
++    '-DPLUGIN_NAME="@0@"'.format(name),
++  ],
++  dependencies: plugin_dep,
++  install: true,
++  install_dir: plugins_dir,
++)
++
++pluginconf = configuration_data()
++pluginconf.set('name', name)
++pluginconf.set('plugins_dir', plugins_dir)
++
++i18n.merge_file(
++  input: configure_file(
++    input: name + '.desktop.in.in',
++    output: name + '.desktop.in',
++    configuration: pluginconf,
++  ),
++  output: name + '.plugin',
++  po_dir: join_paths(meson.project_source_root(), 'po'),
++  install: true,
++  install_dir: plugins_dir,
++  type: 'desktop',
++)
++
++install_data(
++  'icons/weather-status-icon-symbolic.svg',
++  install_dir: phosh_plugin_icon_dir,
++)
+--- a/plugins/weather-status-icon/phosh-plugin-weather-status-icon.c	1970-01-01 02:00:00.000000000 +0200
++++ b/plugins/weather-status-icon/phosh-plugin-weather-status-icon.c	2026-11-20 08:47:04.982912092 +0200
+@@ -0,0 +1,35 @@
++/*
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#include "phosh-plugin.h"
++#include "weather-status-icon.h"
++
++char **g_io_phosh_plugin_weather_status_icon_query (void);
++
++
++void
++g_io_module_load (GIOModule *module)
++{
++  g_type_module_use (G_TYPE_MODULE (module));
++
++  g_io_extension_point_implement (PHOSH_PLUGIN_EXTENSION_POINT_STATUS_ICON_WIDGET,
++                                  PHOSH_TYPE_WEATHER_STATUS_ICON,
++                                  PLUGIN_NAME,
++                                  10);
++}
++
++
++void
++g_io_module_unload (GIOModule *module)
++{
++}
++
++
++char **
++g_io_phosh_plugin_weather_status_icon_query (void)
++{
++  char *extension_points[] = {PHOSH_PLUGIN_EXTENSION_POINT_STATUS_ICON_WIDGET, NULL};
++
++  return g_strdupv (extension_points);
++}
+--- a/plugins/weather-status-icon/phosh-plugin-weather-status-icon.gresources.xml	1970-01-01 02:00:00.000000000 +0200
++++ b/plugins/weather-status-icon/phosh-plugin-weather-status-icon.gresources.xml	2026-11-20 08:47:04.979180942 +0200
+@@ -0,0 +1,6 @@
++<?xml version="1.0" encoding="utf-8"?>
++<gresources>
++  <gresource prefix="/mobi/phosh/plugins/weather-status-icon/">
++    <file preprocess="xml-stripblanks">si.ui</file>
++  </gresource>
++</gresources>
+--- a/plugins/weather-status-icon/si.ui	1970-01-01 02:00:00.000000000 +0200
++++ b/plugins/weather-status-icon/si.ui	2026-11-20 08:47:05.048334567 +0200
+@@ -0,0 +1,15 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<interface>
++  <requires lib="gtk+" version="3.24"/>
++  <template class="PhoshWeatherStatusIcon" parent="PhoshStatusIcon">
++    <property name="visible">0</property>
++    <property name="no-show-all">1</property>
++    <property name="extra-widget">label</property>
++    <property name="icon-name">weather-few-clouds-symbolic</property>
++    <property name="priority">5</property>
++  </template>
++  <object class="GtkLabel" id="label">
++    <property name="visible">1</property>
++    <property name="label"></property>
++  </object>
++</interface>
+--- a/plugins/weather-status-icon/weather-status-icon.c	1970-01-01 02:00:00.000000000 +0200
++++ b/plugins/weather-status-icon/weather-status-icon.c	2026-11-20 08:47:05.051066362 +0200
+@@ -0,0 +1,112 @@
++/*
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ *
++ * Current weather in the top bar (YT3-850F port).
++ * yt3-weather.timer writes "<temperature>|<condition>" (from wttr.in) to
++ * /run/yt3-weather/now every 30 minutes; this shows an icon + temperature.
++ */
++
++#include "weather-status-icon.h"
++
++#include <string.h>
++
++#define WEATHER_FILE "/run/yt3-weather/now"
++#define INTERVAL     60
++
++struct _PhoshWeatherStatusIcon {
++  PhoshStatusIcon parent;
++  GtkLabel       *label;
++  guint           timeout_id;
++};
++
++G_DEFINE_TYPE (PhoshWeatherStatusIcon, phosh_weather_status_icon, PHOSH_TYPE_STATUS_ICON);
++
++
++static const char *
++condition_to_icon (const char *cond)
++{
++  g_autofree char *c = g_ascii_strdown (cond, -1);
++
++  if (strstr (c, "thunder") || strstr (c, "storm"))
++    return "weather-storm-symbolic";
++  if (strstr (c, "snow") || strstr (c, "sleet") || strstr (c, "ice") || strstr (c, "blizzard"))
++    return "weather-snow-symbolic";
++  if (strstr (c, "rain") || strstr (c, "drizzle") || strstr (c, "shower"))
++    return "weather-showers-symbolic";
++  if (strstr (c, "fog") || strstr (c, "mist") || strstr (c, "haze"))
++    return "weather-fog-symbolic";
++  if (strstr (c, "overcast") || g_str_equal (c, "cloudy"))
++    return "weather-overcast-symbolic";
++  if (strstr (c, "cloud"))
++    return "weather-few-clouds-symbolic";
++  if (strstr (c, "sun") || strstr (c, "clear"))
++    return "weather-clear-symbolic";
++  return "weather-few-clouds-symbolic";
++}
++
++
++static gboolean
++on_timeout (gpointer data)
++{
++  PhoshWeatherStatusIcon *self = PHOSH_WEATHER_STATUS_ICON (data);
++  g_autofree char *contents = NULL;
++  g_auto (GStrv) parts = NULL;
++  char *temp;
++
++  if (!g_file_get_contents (WEATHER_FILE, &contents, NULL, NULL) ||
++      !(parts = g_strsplit (g_strstrip (contents), "|", 2)) ||
++      !parts[0] || !*parts[0]) {
++    gtk_widget_set_visible (GTK_WIDGET (self), FALSE);
++    return G_SOURCE_CONTINUE;
++  }
++
++  /* "+18°C" -> "18°" */
++  temp = parts[0];
++  if (*temp == '+')
++    temp++;
++  if (g_str_has_suffix (temp, "C") || g_str_has_suffix (temp, "F"))
++    temp[strlen (temp) - 1] = '\0';
++
++  gtk_label_set_text (self->label, temp);
++  phosh_status_icon_set_icon_name (PHOSH_STATUS_ICON (self),
++                                   condition_to_icon (parts[1] ? parts[1] : ""));
++  phosh_status_icon_set_info (PHOSH_STATUS_ICON (self), parts[1]);
++  gtk_widget_set_visible (GTK_WIDGET (self), TRUE);
++
++  return G_SOURCE_CONTINUE;
++}
++
++
++static void
++phosh_weather_status_icon_dispose (GObject *object)
++{
++  PhoshWeatherStatusIcon *self = PHOSH_WEATHER_STATUS_ICON (object);
++
++  g_clear_handle_id (&self->timeout_id, g_source_remove);
++
++  G_OBJECT_CLASS (phosh_weather_status_icon_parent_class)->dispose (object);
++}
++
++
++static void
++phosh_weather_status_icon_class_init (PhoshWeatherStatusIconClass *klass)
++{
++  GObjectClass *object_class = G_OBJECT_CLASS (klass);
++  GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
++
++  object_class->dispose = phosh_weather_status_icon_dispose;
++
++  gtk_widget_class_set_template_from_resource (widget_class,
++                                               "/mobi/phosh/plugins/weather-status-icon/si.ui");
++  gtk_widget_class_bind_template_child (widget_class, PhoshWeatherStatusIcon, label);
++}
++
++
++static void
++phosh_weather_status_icon_init (PhoshWeatherStatusIcon *self)
++{
++  gtk_widget_init_template (GTK_WIDGET (self));
++
++  self->timeout_id = g_timeout_add_seconds (INTERVAL, on_timeout, self);
++  on_timeout (self);
++}
+--- a/plugins/weather-status-icon/weather-status-icon.desktop.in.in	1970-01-01 02:00:00.000000000 +0200
++++ b/plugins/weather-status-icon/weather-status-icon.desktop.in.in	2026-11-20 08:47:05.004993361 +0200
+@@ -0,0 +1,8 @@
++[Plugin]
++# Translators: This is an internal id, no need to translate it
++Id=@name@
++Name=Weather Status Icon
++Types=status-icon;
++Comment=Current temperature and conditions in the top bar.
++Plugin=@plugins_dir@/libphosh-plugin-@name@.so
++Icon=weather-status-icon
+--- a/plugins/weather-status-icon/weather-status-icon.h	1970-01-01 02:00:00.000000000 +0200
++++ b/plugins/weather-status-icon/weather-status-icon.h	2026-11-20 08:47:13.729738705 +0200
+@@ -0,0 +1,19 @@
++/*
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ *
++ * Current weather in the top bar (YT3-850F port).
++ */
++
++#include "status-icon.h"
++
++#pragma once
++
++G_BEGIN_DECLS
++
++#define PHOSH_TYPE_WEATHER_STATUS_ICON phosh_weather_status_icon_get_type ()
++
++G_DECLARE_FINAL_TYPE (PhoshWeatherStatusIcon,
++                      phosh_weather_status_icon,
++                      PHOSH, WEATHER_STATUS_ICON, PhoshStatusIcon)
++
++G_END_DECLS
+--- a/src/ui/quick-settings.ui	2026-11-19 23:57:32.041589038 +0200
++++ b/src/ui/quick-settings.ui	2026-11-19 23:57:32.113418809 +0200
+@@ -9,7 +9,7 @@
+         <property name="spacing">6</property>
+         <child>
+           <object class="PhoshQuickSetting">
+-            <property name="visible">1</property>
++            <property name="visible" bind-source="wwaninfo" bind-property="present" bind-flags="sync-create"/>
+             <property name="sensitive" bind-source="wwaninfo" bind-property="present" bind-flags="sync-create"/>
+             <property name="status-icon">wwaninfo</property>
+             <property name="long-press-action-name">panel.launch-mobile-panel</property>

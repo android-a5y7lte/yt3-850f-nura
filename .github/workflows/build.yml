@@ -260,13 +260,15 @@ jobs:
           sudo cp -av mods/audio/. mnt_mods/
           # Make scripts executable (the Linux ext4 cp preserves +x from the repo,
           # but belt-and-braces for anything that was committed without it).
-          sudo chmod +x mnt_mods/usr/local/bin/yt3-touch mnt_mods/usr/local/bin/yt3-find-spk-amp mnt_mods/usr/local/bin/yt3-find-camera mnt_mods/usr/local/bin/yt3-cam-gpio-scan mnt_mods/usr/local/bin/yt3-zram \
+          sudo chmod +x mnt_mods/usr/local/bin/yt3-touch mnt_mods/usr/local/bin/yt3-find-spk-amp mnt_mods/usr/local/bin/yt3-find-camera mnt_mods/usr/local/bin/yt3-cam-gpio-scan mnt_mods/usr/local/bin/yt3-zram mnt_mods/usr/local/bin/yt3-weather \
                         mnt_mods/usr/local/bin/yt3-usb-gadget \
                         mnt_mods/usr/local/bin/yt3-audio-diag \
                         mnt_mods/usr/local/bin/yt3-blank
           # Enable the services at boot (systemctl enable in the chroot would
           # work but we don't need the complexity; symlinks are what it writes).
           sudo mkdir -p mnt_mods/etc/systemd/system/multi-user.target.wants
+          sudo mkdir -p mnt_mods/etc/systemd/system/timers.target.wants
+          sudo ln -sf /etc/systemd/system/yt3-weather.timer mnt_mods/etc/systemd/system/timers.target.wants/yt3-weather.timer
           for svc in yt3-touch.service yt3-usb-gadget.service yt3-dnsmasq-usb.service yt3-cpu-perf.service yt3-blank.service yt3-zram.service; do
             sudo ln -sf /etc/systemd/system/$svc \
                 mnt_mods/etc/systemd/system/multi-user.target.wants/$svc

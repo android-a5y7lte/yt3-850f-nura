@@ -3,9 +3,10 @@ Subject: [PATCH] YT3-850F: notification indicator + running-text ticker in the t
 Shows the newest notification's app icon and text next to Wi-Fi/Bluetooth,
 also on the lock screen. Long text runs like a banner, looping, until the
 notification is cleared; then the next newest one is shown.
+Strip width adapts: 220px landscape, 140px portrait.
 ---
 --- a/src/top-panel.c	2026-11-20 00:03:54.834879609 +0200
-+++ b/src/top-panel.c	2026-11-20 08:23:29.355559770 +0200
++++ b/src/top-panel.c	2026-11-20 08:47:46.657086231 +0200
 @@ -18,6 +18,9 @@
  
  #include "layersurface-priv.h"
@@ -52,7 +53,7 @@ notification is cleared; then the next newest one is shown.
    gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, menu_system);
    gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, settings);
    gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, stack);
-@@ -1081,6 +1099,153 @@
+@@ -1081,6 +1099,166 @@
  }
  
  
@@ -169,6 +170,19 @@ notification is cleared; then the next newest one is shown.
 +}
 +
 +
++/* 220px strip in landscape, 140px in portrait so it never crowds the clock */
++static void
++on_top_panel_size_allocate (PhoshTopPanel *self, GdkRectangle *alloc)
++{
++  int want = alloc->width >= 1000 ? 220 : 140;
++  int cur;
++
++  gtk_widget_get_size_request (self->notif_ticker, &cur, NULL);
++  if (cur != want)
++    gtk_widget_set_size_request (self->notif_ticker, want, -1);
++}
++
++
 +static void
 +on_ticker_notification_closed (PhoshTopPanel *self, PhoshNotificationReason reason, PhoshNotification *notification)
 +{
@@ -206,7 +220,7 @@ notification is cleared; then the next newest one is shown.
  static void
  phosh_top_panel_init (PhoshTopPanel *self)
  {
-@@ -1102,6 +1267,18 @@
+@@ -1102,6 +1280,19 @@
                             G_CONNECT_SWAPPED);
    on_layout_changed (self, layout_manager);
  
@@ -216,6 +230,7 @@ notification is cleared; then the next newest one is shown.
 +                           self,
 +                           G_CONNECT_SWAPPED);
 +  on_notifications_changed (self);
++  g_signal_connect (self, "size-allocate", G_CALLBACK (on_top_panel_size_allocate), NULL);
 +  g_signal_connect_object (phosh_notify_manager_get_default (),
 +                           "new-notification",
 +                           G_CALLBACK (on_new_notification),
