@@ -1,10 +1,11 @@
-Subject: [PATCH] YT3-850F: notification indicator + sliding ticker in the top bar
+Subject: [PATCH] YT3-850F: notification indicator + running-text ticker in the top bar
 
-Shows the app icon next to Wi-Fi/Bluetooth while notifications exist, and
-slides the text of each new notification across a ticker, then hides it.
+Shows the newest notification's app icon and text next to Wi-Fi/Bluetooth,
+also on the lock screen. Long text runs like a banner, looping, until the
+notification is cleared; then the next newest one is shown.
 ---
 --- a/src/top-panel.c	2026-11-20 00:03:54.834879609 +0200
-+++ b/src/top-panel.c	2026-11-20 08:14:24.245396781 +0200
++++ b/src/top-panel.c	2026-11-20 08:23:29.355559770 +0200
 @@ -18,6 +18,9 @@
  
  #include "layersurface-priv.h"
@@ -15,7 +16,7 @@ slides the text of each new notification across a ticker, then hides it.
  #include "plugin-loader.h"
  #include "shell-priv.h"
  #include "session-manager.h"
-@@ -92,6 +95,11 @@
+@@ -92,6 +95,12 @@
    GtkWidget *box_top_bar;
    GtkWidget *lbl_clock;      /* top-bar clock */
    GtkWidget *lbl_lang;
@@ -24,18 +25,24 @@ slides the text of each new notification across a ticker, then hides it.
 +  GtkWidget *notif_ticker_lbl;
 +  guint      notif_ticker_id;
 +  int        notif_ticker_pause;
++  GQueue     notif_queue;      /* newest first, refs held */
    PhoshStatusIconsBox *status_icons_box;
  
    GSettings           *custom_status_icons_settings;
-@@ -807,6 +815,7 @@
+@@ -807,6 +816,12 @@
    PhoshTopPanel *self = PHOSH_TOP_PANEL (object);
  
    g_cancellable_cancel (self->cancel);
 +  g_clear_handle_id (&self->notif_ticker_id, g_source_remove);
++  while (!g_queue_is_empty (&self->notif_queue)) {
++    PhoshNotification *n = g_queue_pop_head (&self->notif_queue);
++    g_signal_handlers_disconnect_by_data (n, self);
++    g_object_unref (n);
++  }
    g_clear_object (&self->cancel);
    g_clear_object (&self->custom_status_icons_settings);
    g_clear_object (&self->custom_status_icons_loader);
-@@ -950,6 +959,9 @@
+@@ -950,6 +965,9 @@
    gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, lbl_clock2);
    gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, lbl_date);
    gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, lbl_lang);
@@ -45,28 +52,30 @@ slides the text of each new notification across a ticker, then hides it.
    gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, menu_system);
    gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, settings);
    gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, stack);
-@@ -1082,6 +1094,97 @@
+@@ -1081,6 +1099,153 @@
+ }
  
  
- static void
++static void notif_ticker_show (PhoshTopPanel *self, PhoshNotification *notification);
++
++static void
 +on_notifications_changed (PhoshTopPanel *self)
 +{
 +  PhoshNotifyManager *manager = phosh_notify_manager_get_default ();
 +  GListModel *list = G_LIST_MODEL (phosh_notify_manager_get_list (manager));
 +
-+  gboolean have = g_list_model_get_n_items (list) > 0;
++  if (g_list_model_get_n_items (list) > 0)
++    return;
 +
-+  gtk_widget_set_visible (self->notif_indicator, have);
-+  if (!have)
-+    gtk_image_set_from_icon_name (GTK_IMAGE (self->notif_indicator),
-+                                  "preferences-system-notifications-symbolic",
-+                                  GTK_ICON_SIZE_MENU);
++  /* everything cleared: drop the icon and the ticker */
++  g_queue_clear_full (&self->notif_queue, g_object_unref);
++  notif_ticker_show (self, NULL);
 +}
 +
 +
-+#define NOTIF_TICKER_STEP_MS  33   /* ~30 fps */
-+#define NOTIF_TICKER_STEP_PX  2    /* ~60 px/s */
-+#define NOTIF_TICKER_HOLD     45   /* ticks to hold at start/end (~1.5 s) */
++#define NOTIF_TICKER_STEP_MS  50   /* 20 fps, light on software rendering */
++#define NOTIF_TICKER_STEP_PX  3    /* ~60 px/s */
++#define NOTIF_TICKER_HOLD     30   /* ticks to hold at start/end (~1.5 s) */
 +
 +static gboolean
 +notif_ticker_step (gpointer data)
@@ -81,33 +90,57 @@ slides the text of each new notification across a ticker, then hides it.
 +    return G_SOURCE_CONTINUE;
 +  }
 +
-+  if (val < max) {
-+    gtk_adjustment_set_value (adj, MIN (val + NOTIF_TICKER_STEP_PX, max));
-+    if (val + NOTIF_TICKER_STEP_PX >= max)
-+      self->notif_ticker_pause = NOTIF_TICKER_HOLD;
++  if (max <= 0) {
++    /* text fits: nothing to slide, stay still */
++    self->notif_ticker_id = 0;
++    return G_SOURCE_REMOVE;
++  }
++
++  if (val >= max) {
++    /* reached the end: jump back and run again */
++    gtk_adjustment_set_value (adj, 0);
++    self->notif_ticker_pause = NOTIF_TICKER_HOLD;
 +    return G_SOURCE_CONTINUE;
 +  }
 +
-+  /* Done: text fully shown (or it fit from the start) - hide the ticker */
-+  gtk_widget_set_visible (self->notif_ticker, FALSE);
-+  self->notif_ticker_id = 0;
-+  return G_SOURCE_REMOVE;
++  gtk_adjustment_set_value (adj, MIN (val + NOTIF_TICKER_STEP_PX, max));
++  if (val + NOTIF_TICKER_STEP_PX >= max)
++    self->notif_ticker_pause = NOTIF_TICKER_HOLD;
++  return G_SOURCE_CONTINUE;
 +}
 +
 +
++/* Show @notification in the top bar (icon + running text), NULL hides it */
 +static void
-+on_new_notification (PhoshTopPanel *self, PhoshNotification *notification)
++notif_ticker_show (PhoshTopPanel *self, PhoshNotification *notification)
 +{
-+  const char *app = phosh_notification_get_app_name (notification);
-+  const char *summary = phosh_notification_get_summary (notification);
-+  const char *body = phosh_notification_get_body (notification);
-+  GIcon *icon = phosh_notification_get_app_icon (notification);
 +  g_autofree char *text = NULL;
 +  g_autofree char *plain_body = NULL;
-+  GtkAdjustment *adj;
++  const char *app, *summary, *body;
++  GIcon *icon;
++
++  g_clear_handle_id (&self->notif_ticker_id, g_source_remove);
++
++  if (notification == NULL) {
++    gtk_widget_set_visible (self->notif_ticker, FALSE);
++    gtk_widget_set_visible (self->notif_indicator, FALSE);
++    gtk_image_set_from_icon_name (GTK_IMAGE (self->notif_indicator),
++                                  "preferences-system-notifications-symbolic",
++                                  GTK_ICON_SIZE_MENU);
++    return;
++  }
++
++  app = phosh_notification_get_app_name (notification);
++  summary = phosh_notification_get_summary (notification);
++  body = phosh_notification_get_body (notification);
++  icon = phosh_notification_get_app_icon (notification);
 +
 +  if (icon)
 +    gtk_image_set_from_gicon (GTK_IMAGE (self->notif_indicator), icon, GTK_ICON_SIZE_MENU);
++  else
++    gtk_image_set_from_icon_name (GTK_IMAGE (self->notif_indicator),
++                                  "preferences-system-notifications-symbolic",
++                                  GTK_ICON_SIZE_MENU);
 +  gtk_image_set_pixel_size (GTK_IMAGE (self->notif_indicator), 16);
 +  gtk_widget_set_visible (self->notif_indicator, TRUE);
 +
@@ -124,26 +157,56 @@ slides the text of each new notification across a ticker, then hides it.
 +                          summary ? summary : "",
 +                          plain_body ? " — " : "",
 +                          plain_body ? plain_body : "");
-+  if (!*text)
-+    return;
 +
 +  gtk_label_set_text (GTK_LABEL (self->notif_ticker_lbl), text);
-+  adj = gtk_scrolled_window_get_hadjustment (GTK_SCROLLED_WINDOW (self->notif_ticker));
-+  gtk_adjustment_set_value (adj, 0);
-+  gtk_widget_set_visible (self->notif_ticker, TRUE);
++  gtk_adjustment_set_value (gtk_scrolled_window_get_hadjustment (GTK_SCROLLED_WINDOW (self->notif_ticker)), 0);
++  gtk_widget_set_visible (self->notif_ticker, *text != '\0');
 +
-+  /* hold at the start, then slide; short text just stays ~3 s */
++  /* hold at the start, then slide (only if it doesn't fit), loop until cleared */
 +  self->notif_ticker_pause = NOTIF_TICKER_HOLD * 2;
-+  g_clear_handle_id (&self->notif_ticker_id, g_source_remove);
-+  self->notif_ticker_id = g_timeout_add (NOTIF_TICKER_STEP_MS, notif_ticker_step, self);
++  if (*text)
++    self->notif_ticker_id = g_timeout_add (NOTIF_TICKER_STEP_MS, notif_ticker_step, self);
 +}
 +
 +
 +static void
++on_ticker_notification_closed (PhoshTopPanel *self, PhoshNotificationReason reason, PhoshNotification *notification)
++{
++  GList *link = g_queue_find (&self->notif_queue, notification);
++
++  if (link == NULL)
++    return;
++
++  g_signal_handlers_disconnect_by_data (notification, self);
++  g_queue_delete_link (&self->notif_queue, link);
++  g_object_unref (notification);
++
++  /* fall back to the newest one still around */
++  notif_ticker_show (self, g_queue_peek_head (&self->notif_queue));
++}
++
++
++static void
++on_new_notification (PhoshTopPanel *self, PhoshNotification *notification)
++{
++  if (!g_queue_find (&self->notif_queue, notification)) {
++    g_queue_push_head (&self->notif_queue, g_object_ref (notification));
++    g_signal_connect_object (notification, "closed",
++                             G_CALLBACK (on_ticker_notification_closed),
++                             self, G_CONNECT_SWAPPED);
++  } else {
++    /* updated notification: move it to the front */
++    g_queue_remove (&self->notif_queue, notification);
++    g_queue_push_head (&self->notif_queue, notification);
++  }
++  notif_ticker_show (self, notification);
++}
++
++
+ static void
  phosh_top_panel_init (PhoshTopPanel *self)
  {
-   PhoshLayoutManager *layout_manager;
-@@ -1102,6 +1205,18 @@
+@@ -1102,6 +1267,18 @@
                             G_CONNECT_SWAPPED);
    on_layout_changed (self, layout_manager);
  
