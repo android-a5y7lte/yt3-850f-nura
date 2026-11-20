@@ -1,34 +1,51 @@
-Subject: [PATCH] YT3-850F: notification indicator in the top bar next to Wi-Fi/Bluetooth
+Subject: [PATCH] YT3-850F: notification indicator + sliding ticker in the top bar
 
+Shows the app icon next to Wi-Fi/Bluetooth while notifications exist, and
+slides the text of each new notification across a ticker, then hides it.
 ---
---- a/src/top-panel.c
-+++ b/src/top-panel.c
-@@ -18,6 +18,8 @@
+--- a/src/top-panel.c	2026-11-20 00:03:54.834879609 +0200
++++ b/src/top-panel.c	2026-11-20 08:14:24.245396781 +0200
+@@ -18,6 +18,9 @@
  
  #include "layersurface-priv.h"
  #include "layout-manager.h"
 +#include "notifications/notify-manager.h"
 +#include "notifications/notification-list.h"
++#include "notifications/notification.h"
  #include "plugin-loader.h"
  #include "shell-priv.h"
  #include "session-manager.h"
-@@ -92,6 +94,7 @@
+@@ -92,6 +95,11 @@
    GtkWidget *box_top_bar;
    GtkWidget *lbl_clock;      /* top-bar clock */
    GtkWidget *lbl_lang;
 +  GtkWidget *notif_indicator;
++  GtkWidget *notif_ticker;
++  GtkWidget *notif_ticker_lbl;
++  guint      notif_ticker_id;
++  int        notif_ticker_pause;
    PhoshStatusIconsBox *status_icons_box;
  
    GSettings           *custom_status_icons_settings;
-@@ -950,6 +953,7 @@
+@@ -807,6 +815,7 @@
+   PhoshTopPanel *self = PHOSH_TOP_PANEL (object);
+ 
+   g_cancellable_cancel (self->cancel);
++  g_clear_handle_id (&self->notif_ticker_id, g_source_remove);
+   g_clear_object (&self->cancel);
+   g_clear_object (&self->custom_status_icons_settings);
+   g_clear_object (&self->custom_status_icons_loader);
+@@ -950,6 +959,9 @@
    gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, lbl_clock2);
    gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, lbl_date);
    gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, lbl_lang);
 +  gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, notif_indicator);
++  gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, notif_ticker);
++  gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, notif_ticker_lbl);
    gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, menu_system);
    gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, settings);
    gtk_widget_class_bind_template_child (widget_class, PhoshTopPanel, stack);
-@@ -1082,6 +1086,16 @@
+@@ -1082,6 +1094,97 @@
  
  
  static void
@@ -37,7 +54,88 @@ Subject: [PATCH] YT3-850F: notification indicator in the top bar next to Wi-Fi/B
 +  PhoshNotifyManager *manager = phosh_notify_manager_get_default ();
 +  GListModel *list = G_LIST_MODEL (phosh_notify_manager_get_list (manager));
 +
-+  gtk_widget_set_visible (self->notif_indicator, g_list_model_get_n_items (list) > 0);
++  gboolean have = g_list_model_get_n_items (list) > 0;
++
++  gtk_widget_set_visible (self->notif_indicator, have);
++  if (!have)
++    gtk_image_set_from_icon_name (GTK_IMAGE (self->notif_indicator),
++                                  "preferences-system-notifications-symbolic",
++                                  GTK_ICON_SIZE_MENU);
++}
++
++
++#define NOTIF_TICKER_STEP_MS  33   /* ~30 fps */
++#define NOTIF_TICKER_STEP_PX  2    /* ~60 px/s */
++#define NOTIF_TICKER_HOLD     45   /* ticks to hold at start/end (~1.5 s) */
++
++static gboolean
++notif_ticker_step (gpointer data)
++{
++  PhoshTopPanel *self = PHOSH_TOP_PANEL (data);
++  GtkAdjustment *adj = gtk_scrolled_window_get_hadjustment (GTK_SCROLLED_WINDOW (self->notif_ticker));
++  double max = gtk_adjustment_get_upper (adj) - gtk_adjustment_get_page_size (adj);
++  double val = gtk_adjustment_get_value (adj);
++
++  if (self->notif_ticker_pause > 0) {
++    self->notif_ticker_pause--;
++    return G_SOURCE_CONTINUE;
++  }
++
++  if (val < max) {
++    gtk_adjustment_set_value (adj, MIN (val + NOTIF_TICKER_STEP_PX, max));
++    if (val + NOTIF_TICKER_STEP_PX >= max)
++      self->notif_ticker_pause = NOTIF_TICKER_HOLD;
++    return G_SOURCE_CONTINUE;
++  }
++
++  /* Done: text fully shown (or it fit from the start) - hide the ticker */
++  gtk_widget_set_visible (self->notif_ticker, FALSE);
++  self->notif_ticker_id = 0;
++  return G_SOURCE_REMOVE;
++}
++
++
++static void
++on_new_notification (PhoshTopPanel *self, PhoshNotification *notification)
++{
++  const char *app = phosh_notification_get_app_name (notification);
++  const char *summary = phosh_notification_get_summary (notification);
++  const char *body = phosh_notification_get_body (notification);
++  GIcon *icon = phosh_notification_get_app_icon (notification);
++  g_autofree char *text = NULL;
++  g_autofree char *plain_body = NULL;
++  GtkAdjustment *adj;
++
++  if (icon)
++    gtk_image_set_from_gicon (GTK_IMAGE (self->notif_indicator), icon, GTK_ICON_SIZE_MENU);
++  gtk_image_set_pixel_size (GTK_IMAGE (self->notif_indicator), 16);
++  gtk_widget_set_visible (self->notif_indicator, TRUE);
++
++  if (body && *body) {
++    /* bodies may carry markup, keep it to one plain line */
++    if (!pango_parse_markup (body, -1, 0, NULL, &plain_body, NULL, NULL))
++      plain_body = g_strdup (body);
++    g_strdelimit (plain_body, "\n\r\t", ' ');
++  }
++
++  text = g_strdup_printf ("%s%s%s%s%s",
++                          (app && *app) ? app : "",
++                          (app && *app) ? ": " : "",
++                          summary ? summary : "",
++                          plain_body ? " — " : "",
++                          plain_body ? plain_body : "");
++  if (!*text)
++    return;
++
++  gtk_label_set_text (GTK_LABEL (self->notif_ticker_lbl), text);
++  adj = gtk_scrolled_window_get_hadjustment (GTK_SCROLLED_WINDOW (self->notif_ticker));
++  gtk_adjustment_set_value (adj, 0);
++  gtk_widget_set_visible (self->notif_ticker, TRUE);
++
++  /* hold at the start, then slide; short text just stays ~3 s */
++  self->notif_ticker_pause = NOTIF_TICKER_HOLD * 2;
++  g_clear_handle_id (&self->notif_ticker_id, g_source_remove);
++  self->notif_ticker_id = g_timeout_add (NOTIF_TICKER_STEP_MS, notif_ticker_step, self);
 +}
 +
 +
@@ -45,7 +143,7 @@ Subject: [PATCH] YT3-850F: notification indicator in the top bar next to Wi-Fi/B
  phosh_top_panel_init (PhoshTopPanel *self)
  {
    PhoshLayoutManager *layout_manager;
-@@ -1102,6 +1116,13 @@
+@@ -1102,6 +1205,18 @@
                             G_CONNECT_SWAPPED);
    on_layout_changed (self, layout_manager);
  
@@ -55,13 +153,18 @@ Subject: [PATCH] YT3-850F: notification indicator in the top bar next to Wi-Fi/B
 +                           self,
 +                           G_CONNECT_SWAPPED);
 +  on_notifications_changed (self);
++  g_signal_connect_object (phosh_notify_manager_get_default (),
++                           "new-notification",
++                           G_CALLBACK (on_new_notification),
++                           self,
++                           G_CONNECT_SWAPPED);
 +
    self->custom_status_icons_settings = g_settings_new (CUSTOM_STATUS_ICONS_SCHEMA);
    self->custom_status_icons_loader = phosh_plugin_loader_new ((GStrv) plugin_dirs,
                                                                PHOSH_EXTENSION_POINT_STATUS_ICON_WIDGET);
---- a/src/ui/top-panel.ui
-+++ b/src/ui/top-panel.ui
-@@ -243,6 +243,16 @@
+--- a/src/ui/top-panel.ui	2026-11-20 00:03:54.836306209 +0200
++++ b/src/ui/top-panel.ui	2026-11-20 08:14:24.243343077 +0200
+@@ -243,6 +243,41 @@
                            </object>
                          </child>
                          <child>
@@ -72,6 +175,31 @@ Subject: [PATCH] YT3-850F: notification indicator in the top bar next to Wi-Fi/B
 +                            <property name="icon-name">preferences-system-notifications-symbolic</property>
 +                            <property name="pixel-size">16</property>
 +                            <property name="margin-start">4</property>
++                          </object>
++                        </child>
++                        <child>
++                          <!-- YT3-850F: ticker that slides the text of a new notification -->
++                          <object class="GtkScrolledWindow" id="notif_ticker">
++                            <property name="visible">0</property>
++                            <property name="no-show-all">1</property>
++                            <property name="width-request">220</property>
++                            <property name="margin-start">6</property>
++                            <property name="hscrollbar-policy">external</property>
++                            <property name="vscrollbar-policy">never</property>
++                            <property name="propagate-natural-height">1</property>
++                            <child>
++                              <object class="GtkViewport">
++                                <property name="visible">1</property>
++                                <property name="shadow-type">none</property>
++                                <child>
++                                  <object class="GtkLabel" id="notif_ticker_lbl">
++                                    <property name="visible">1</property>
++                                    <property name="xalign">0</property>
++                                    <property name="single-line-mode">1</property>
++                                  </object>
++                                </child>
++                              </object>
++                            </child>
 +                          </object>
 +                        </child>
 +                        <child>
