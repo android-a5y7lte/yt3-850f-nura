@@ -77,7 +77,7 @@ jobs:
               # abuild build can fail on the APKBUILD packaging tail even after the
               # compile succeeds; the .so file is what we need either way.
               set +e; su b -c "abuild build"; set -e
-              # grep pkgver, not source (APKBUILD references $srcdir which isn't set here)
+              # grep pkgver, not source (APKBUILD uses srcdir which is not set here)
               ver=$(grep ^pkgver= APKBUILD | head -1 | cut -d= -f2)
               echo "mesa pkgver=$ver"
               echo "== finding libgallium =="
