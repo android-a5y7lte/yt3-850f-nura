@@ -76,13 +76,16 @@ jobs:
           PY
               # abuild build can fail on the APKBUILD packaging tail even after the
               # compile succeeds; the .so file is what we need either way.
-              su b -c "abuild build || true"
-              ver=$(. ./APKBUILD; echo $pkgver)
+              set +e; su b -c "abuild build"; set -e
+              # grep pkgver, not source (APKBUILD references $srcdir which isn't set here)
+              ver=$(awk -F= '/^pkgver=/{print $2; exit}' APKBUILD)
+              echo "mesa pkgver=$ver"
               echo "== finding libgallium =="
-              find src -name "libgallium-*.so*" -type f -ls | tee /tmp/found
+              find src -name "libgallium-*.so*" -type f -ls 2>&1 | tee /tmp/found
               find src -name "libgallium-*.so*" -type f -exec cp -L {} /out/ \;
               echo "$ver" > /out/MESA_VERSION
-              [ -s /out/libgallium-$ver.so ] || { echo "libgallium missing"; exit 1; }
+              ls -la /out
+              [ -s "/out/libgallium-$ver.so" ] || { echo "libgallium missing"; exit 1; }
             '
           ls -la out
           test -n "$(ls out/libgallium-*.so)"
