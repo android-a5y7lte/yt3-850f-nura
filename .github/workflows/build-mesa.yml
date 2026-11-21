@@ -74,10 +74,15 @@ jobs:
           open(p, "w").write(s)
           print(s[line_start-200:line_start+300])
           PY
-              su b -c "abuild build"
+              # abuild build can fail on the APKBUILD packaging tail even after the
+              # compile succeeds; the .so file is what we need either way.
+              su b -c "abuild build || true"
               ver=$(. ./APKBUILD; echo $pkgver)
-              find src -name "libgallium-*.so" -type f -exec cp {} /out/ \;
+              echo "== finding libgallium =="
+              find src -name "libgallium-*.so*" -type f -ls | tee /tmp/found
+              find src -name "libgallium-*.so*" -type f -exec cp -L {} /out/ \;
               echo "$ver" > /out/MESA_VERSION
+              [ -s /out/libgallium-$ver.so ] || { echo "libgallium missing"; exit 1; }
             '
           ls -la out
           test -n "$(ls out/libgallium-*.so)"
