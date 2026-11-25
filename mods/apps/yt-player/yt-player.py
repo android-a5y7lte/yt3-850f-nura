@@ -20,6 +20,19 @@ CACHE = os.path.join(GLib.get_user_cache_dir(), "yt-player")
 HIST = os.path.join(GLib.get_user_config_dir(), "yt-player", "history")
 THUMB_W, THUMB_H = 300, 169
 RESULTS = 20
+# H.264 at 360p is what this tablet decodes smoothly
+PLAY_FORMAT = "bestvideo[height<=360][vcodec^=avc1]+bestaudio/best[height<=360]"
+# one ready-made file with picture and sound, so no merge step is needed
+DOWNLOAD_FORMAT = "best[height<=360][ext=mp4]/best[height<=360]"
+VIDEOS = GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_VIDEOS) or os.path.expanduser("~/Videos")
+INPUT_CONF = os.path.join(GLib.get_user_config_dir(), "yt-player", "input.conf")
+MPV_ARGS = [
+    "mpv", "--fs", "--profile=fast", "--ytdl-format=" + PLAY_FORMAT, "--osc=yes",
+    # always-visible, finger-sized controls with a close button
+    "--script-opts=osc-visibility=always,osc-layout=bottombar,osc-scalefullscreen=1.8,"
+    "osc-scalewindowed=1.8,osc-windowcontrols=yes",
+    "--input-conf=" + INPUT_CONF,
+]
 
 CSS = b"""
 window { background: #0f1115; }
@@ -70,6 +83,12 @@ class Window(Gtk.ApplicationWindow):
         self.player = None
         self.history = load_history()
         os.makedirs(CACHE, exist_ok=True)
+        try:  # tap the picture to pause/resume; double tap does nothing
+            os.makedirs(os.path.dirname(INPUT_CONF), exist_ok=True)
+            with open(INPUT_CONF, "w", encoding="utf-8") as f:
+                f.write("MBTN_LEFT cycle pause\nMBTN_LEFT_DBL ignore\n")
+        except OSError:
+            pass
 
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         overlay = Gtk.Overlay()
@@ -85,8 +104,11 @@ class Window(Gtk.ApplicationWindow):
         search = Gtk.Button(label="Search")
         search.get_style_context().add_class("suggested-action")
         search.connect("clicked", self.on_search)
+        videos = Gtk.Button(label="Downloads")
+        videos.connect("clicked", self.on_open_videos)
         bar.pack_start(self.entry, True, True, 0)
         bar.pack_start(search, False, False, 0)
+        bar.pack_start(videos, False, False, 0)
         root.pack_start(bar, False, False, 0)
 
         self.stack = Gtk.Stack()
@@ -234,6 +256,9 @@ class Window(Gtk.ApplicationWindow):
             card.pack_start(img, False, False, 0)
             card.pack_start(title, False, False, 0)
             card.pack_start(meta, False, False, 0)
+            dl = Gtk.Button(label="Download")
+            dl.connect("clicked", self.on_download, e["id"], e.get("title") or e["id"])
+            card.pack_start(dl, False, False, 0)
             child = Gtk.FlowBoxChild()
             child.video_id = e["id"]
             child.add(card)
@@ -274,11 +299,47 @@ class Window(Gtk.ApplicationWindow):
         if self.player is not None and self.player.poll() is None:
             return
         try:
-            self.player = subprocess.Popen(["mpv", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.player = subprocess.Popen(MPV_ARGS + [url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except OSError as e:
             self.show_toast("Could not start mpv: %s" % e)
             return
         self.show_toast("Loading video...")
+
+    # ----- downloads -----
+    def on_open_videos(self, _button):
+        os.makedirs(VIDEOS, exist_ok=True)
+        try:
+            Gio.AppInfo.launch_default_for_uri(GLib.filename_to_uri(VIDEOS, None), None)
+        except GLib.Error as e:
+            self.show_toast("Could not open %s: %s" % (VIDEOS, e.message))
+
+    def on_download(self, button, vid, title):
+        button.set_sensitive(False)
+        button.set_label("Downloading...")
+        self.show_toast("Downloading: %s" % title[:50], 6)
+        threading.Thread(target=self.download_worker, args=(button, vid, title), daemon=True).start()
+
+    def download_worker(self, button, vid, title):
+        ok, error = False, ""
+        try:
+            os.makedirs(VIDEOS, exist_ok=True)
+            out = subprocess.run(
+                ["yt-dlp", "--no-warnings", "--no-playlist", "-f", DOWNLOAD_FORMAT,
+                 "-o", os.path.join(VIDEOS, "%(title).80s [%(id)s].%(ext)s"),
+                 "https://www.youtube.com/watch?v=%s" % vid],
+                capture_output=True, text=True, timeout=3600)
+            ok = out.returncode == 0
+            if not ok:
+                error = (out.stderr.strip().splitlines() or ["unknown error"])[-1]
+        except Exception as e:  # noqa: BLE001 - shown to the user
+            error = str(e)
+        GLib.idle_add(self.download_done, button, title, ok, error)
+
+    def download_done(self, button, title, ok, error):
+        button.set_label("Downloaded" if ok else "Download")
+        button.set_sensitive(not ok)
+        self.show_toast(("Saved to Videos: %s" % title[:40]) if ok else ("Download failed: %s" % error[:80]), 8)
+        return False
 
     def show_toast(self, text, seconds=12):
         self.toast_label.set_text(text)
