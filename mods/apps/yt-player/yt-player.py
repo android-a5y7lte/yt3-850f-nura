@@ -29,13 +29,13 @@ INPUT_CONF = os.path.join(GLib.get_user_config_dir(), "yt-player", "input.conf")
 TOUCH_LUA = os.path.join(GLib.get_user_config_dir(), "yt-player", "yt-touch.lua")
 MPV_ARGS = [
     "mpv", "--fs", "--profile=fast", "--ytdl-format=" + PLAY_FORMAT, "--osc=yes",
-    # always-visible, finger-sized controls with a close button
-    "--script-opts=osc-visibility=always,osc-layout=bottombar,osc-scalefullscreen=1.8,"
-    "osc-scalewindowed=1.8,osc-windowcontrols=yes",
+    # finger-sized control bar: shown on touch, hidden again after 5 seconds
+    "--script-opts=osc-visibility=auto,osc-hidetimeout=5000,osc-minmousemove=0,"
+    "osc-layout=bottombar,osc-scalefullscreen=1.8,osc-scalewindowed=1.8,osc-windowcontrols=yes",
     "--input-conf=" + INPUT_CONF,
     "--script=" + TOUCH_LUA,
 ]
-# Touch gestures for mpv: tap = pause/resume, slide left/right = seek,
+# Touch gestures for mpv: tap = show the control bar, slide left/right = seek,
 # slide up/down = volume. The control bar keeps handling its own buttons.
 TOUCH_SCRIPT = r"""
 local start = nil
@@ -61,8 +61,7 @@ mp.add_key_binding("MBTN_LEFT", "yt-touch", function(t)
             mp.commandv("add", "volume", math.floor(-dy / h * 60))
             mp.osd_message("Volume " .. math.floor(mp.get_property_number("volume", 0)), 1.5)
         else
-            mp.commandv("cycle", "pause")
-            mp.osd_message(mp.get_property_bool("pause") and "Paused" or "Playing", 1)
+            mp.commandv("script-message-to", "osc", "osc-show")
         end
     end
 end, { complex = true })
