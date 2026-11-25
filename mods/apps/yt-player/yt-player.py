@@ -26,13 +26,47 @@ PLAY_FORMAT = "bestvideo[height<=360][vcodec^=avc1]+bestaudio/best[height<=360]"
 DOWNLOAD_FORMAT = "best[height<=360][ext=mp4]/best[height<=360]"
 VIDEOS = GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_VIDEOS) or os.path.expanduser("~/Videos")
 INPUT_CONF = os.path.join(GLib.get_user_config_dir(), "yt-player", "input.conf")
+TOUCH_LUA = os.path.join(GLib.get_user_config_dir(), "yt-player", "yt-touch.lua")
 MPV_ARGS = [
     "mpv", "--fs", "--profile=fast", "--ytdl-format=" + PLAY_FORMAT, "--osc=yes",
     # always-visible, finger-sized controls with a close button
     "--script-opts=osc-visibility=always,osc-layout=bottombar,osc-scalefullscreen=1.8,"
     "osc-scalewindowed=1.8,osc-windowcontrols=yes",
     "--input-conf=" + INPUT_CONF,
+    "--script=" + TOUCH_LUA,
 ]
+# Touch gestures for mpv: tap = pause/resume, slide left/right = seek,
+# slide up/down = volume. The control bar keeps handling its own buttons.
+TOUCH_SCRIPT = r"""
+local start = nil
+local function pos()
+    local p = mp.get_property_native("mouse-pos")
+    return p.x, p.y
+end
+mp.add_key_binding("MBTN_LEFT", "yt-touch", function(t)
+    if t.event == "down" then
+        local x, y = pos()
+        start = { x = x, y = y }
+    elseif t.event == "up" and start then
+        local x, y = pos()
+        local dx, dy = x - start.x, y - start.y
+        start = nil
+        local w = mp.get_property_number("osd-width", 1280)
+        local h = mp.get_property_number("osd-height", 800)
+        if math.abs(dx) > w * 0.06 and math.abs(dx) > math.abs(dy) then
+            local secs = math.floor(dx / w * 120)
+            mp.commandv("seek", secs, "relative")
+            mp.osd_message(string.format("%+d s", secs), 1.5)
+        elseif math.abs(dy) > h * 0.08 then
+            mp.commandv("add", "volume", math.floor(-dy / h * 60))
+            mp.osd_message("Volume " .. math.floor(mp.get_property_number("volume", 0)), 1.5)
+        else
+            mp.commandv("cycle", "pause")
+            mp.osd_message(mp.get_property_bool("pause") and "Paused" or "Playing", 1)
+        end
+    end
+end, { complex = true })
+"""
 
 CSS = b"""
 window { background: #0f1115; }
@@ -83,10 +117,12 @@ class Window(Gtk.ApplicationWindow):
         self.player = None
         self.history = load_history()
         os.makedirs(CACHE, exist_ok=True)
-        try:  # tap the picture to pause/resume; double tap does nothing
+        try:  # gestures live in the Lua script; a double tap must not leave fullscreen
             os.makedirs(os.path.dirname(INPUT_CONF), exist_ok=True)
             with open(INPUT_CONF, "w", encoding="utf-8") as f:
-                f.write("MBTN_LEFT cycle pause\nMBTN_LEFT_DBL ignore\n")
+                f.write("MBTN_LEFT_DBL ignore\n")
+            with open(TOUCH_LUA, "w", encoding="utf-8") as f:
+                f.write(TOUCH_SCRIPT)
         except OSError:
             pass
 
