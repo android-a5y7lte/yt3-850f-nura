@@ -28,84 +28,236 @@ VIDEOS = GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_VIDEOS) or os.pa
 INPUT_CONF = os.path.join(GLib.get_user_config_dir(), "yt-player", "input.conf")
 TOUCH_LUA = os.path.join(GLib.get_user_config_dir(), "yt-player", "yt-touch.lua")
 MPV_ARGS = [
-    "mpv", "--fs", "--profile=fast", "--ytdl-format=" + PLAY_FORMAT, "--osc=yes",
+    "mpv", "--fs", "--profile=fast", "--ytdl-format=" + PLAY_FORMAT,
     # mpv's default renderer (gpu-next/libplacebo) cannot compile its overlay shader
-    # on this tablet's Adreno 304, so nothing is drawn over the video (no control
-    # bar, no messages). The older gpu renderer with OpenGL ES works.
+    # on this tablet's Adreno 304, so nothing is drawn over the video. The older
+    # gpu renderer with OpenGL ES works.
     "--vo=gpu", "--opengl-es=yes",
-    # finger-sized control bar: shown on touch, hidden again after 5 seconds
-    # one-line, see-through bar; no desktop-style title bar (the gesture script
-    # draws its own close button instead)
-    "--script-opts=osc-visibility=never,osc-layout=slimbottombar,osc-boxalpha=200,"
-    "osc-scalefullscreen=1.8,osc-scalewindowed=1.8,osc-windowcontrols=no",
+    # the stock control bar is off; yt-touch.lua draws finger-sized controls
+    "--osc=no",
     "--input-conf=" + INPUT_CONF,
     "--script=" + TOUCH_LUA,
 ]
-# Touch gestures for mpv: tap = show the control bar, slide left/right = seek,
-# slide up/down = volume. The control bar keeps handling its own buttons.
+# Touch controls for mpv, written to TOUCH_LUA at start-up.
 TOUCH_SCRIPT = r"""
-local start, visible, timer = nil, false, nil
-local close_btn = mp.create_osd_overlay("ass-events")
+-- YT Player touch controls for mpv (stock control bar is switched off).
+-- Tap: show/hide controls. Centre: back 10 s, play/pause, forward 10 s.
+-- Bottom: seek bar. Top-left: download. Top-right: close.
+-- Slide left/right: seek. Slide up/down: volume.
+local start, visible, hide_timer, tick = nil, false, nil, nil
+local ov = mp.create_osd_overlay("ass-events")
+local downloading = {}
+
 local function dims()
-    return mp.get_property_number("osd-width", 1280), mp.get_property_number("osd-height", 800)
+    local w = mp.get_property_number("osd-width", 0)
+    local h = mp.get_property_number("osd-height", 0)
+    if w <= 0 or h <= 0 then w, h = 1280, 800 end
+    return w, h
 end
+
+local function layout()
+    local w, h = dims()
+    local L = { w = w, h = h }
+    L.S = math.floor(h * 0.17)            -- play/pause size
+    L.s2 = math.floor(L.S * 0.7)          -- back/forward size
+    L.cy = math.floor(h / 2)
+    L.gap = math.floor(L.S * 2.3)
+    L.cx = math.floor(w / 2)
+    L.bx0 = math.floor(w * 0.12)
+    L.bx1 = math.floor(w * 0.88)
+    L.by = math.floor(h * 0.88)
+    L.bh = math.max(8, math.floor(h * 0.012))
+    L.D = math.floor(h * 0.10)            -- download icon size
+    L.fs = math.floor(h * 0.04)
+    return L
+end
+
+local function fmt_time(t)
+    if not t or t < 0 then t = 0 end
+    t = math.floor(t)
+    local hh, mm, ss = math.floor(t / 3600), math.floor(t % 3600 / 60), t % 60
+    if hh > 0 then return string.format("%d:%02d:%02d", hh, mm, ss) end
+    return string.format("%d:%02d", mm, ss)
+end
+
+local function shape(x, y, path, alpha)
+    return string.format("{\\an7\\pos(%d,%d)\\bord2\\shad0\\1c&HFFFFFF&\\3c&H000000&\\1a&H%s&\\p1}%s{\\p0}",
+        math.floor(x), math.floor(y), alpha or "00", path)
+end
+
+local function text(x, y, an, size, str)
+    return string.format("{\\an%d\\pos(%d,%d)\\fs%d\\bord2\\shad0\\1c&HFFFFFF&\\3c&H000000&}%s",
+        an, math.floor(x), math.floor(y), math.floor(size), str)
+end
+
+local function rect(wd, ht)
+    return string.format("m 0 0 l %d 0 l %d %d l 0 %d", wd, wd, ht, ht)
+end
+
+local function draw()
+    local L = layout()
+    local out = {}
+    local S, s2, f = L.S, L.s2, math.floor
+
+    -- play / pause
+    if mp.get_property_bool("pause") then
+        out[#out + 1] = shape(L.cx - S / 2, L.cy - S / 2, string.format("m 0 0 l %d %d l 0 %d", S, f(S / 2), S))
+    else
+        local bw = f(S * 0.34)
+        out[#out + 1] = shape(L.cx - S / 2, L.cy - S / 2, string.format(
+            "m 0 0 l %d 0 l %d %d l 0 %d m %d 0 l %d 0 l %d %d l %d %d",
+            bw, bw, S, S, S - bw, S, S, S, S - bw, S))
+    end
+    -- back 10 s (two left-pointing triangles)
+    local hf, md = f(s2 / 2), f(s2 / 2)
+    out[#out + 1] = shape(L.cx - L.gap - s2 / 2, L.cy - s2 / 2, string.format(
+        "m %d 0 l 0 %d l %d %d m %d 0 l %d %d l %d %d", hf, md, hf, s2, s2, hf, md, s2, s2))
+    out[#out + 1] = text(L.cx - L.gap, L.cy + s2 / 2 + 6, 8, L.fs, "-10")
+    -- forward 10 s (two right-pointing triangles)
+    out[#out + 1] = shape(L.cx + L.gap - s2 / 2, L.cy - s2 / 2, string.format(
+        "m 0 0 l %d %d l 0 %d m %d 0 l %d %d l %d %d", hf, md, s2, hf, s2, md, hf, s2))
+    out[#out + 1] = text(L.cx + L.gap, L.cy + s2 / 2 + 6, 8, L.fs, "+10")
+
+    -- seek bar with times
+    local pos = mp.get_property_number("time-pos", 0) or 0
+    local dur = mp.get_property_number("duration", 0) or 0
+    local len = L.bx1 - L.bx0
+    local frac = 0
+    if dur > 0 then frac = math.max(0, math.min(1, pos / dur)) end
+    out[#out + 1] = shape(L.bx0, L.by, rect(len, L.bh), "90")
+    if frac > 0 then out[#out + 1] = shape(L.bx0, L.by, rect(math.max(1, f(len * frac)), L.bh)) end
+    local k = L.bh * 3
+    out[#out + 1] = shape(L.bx0 + len * frac - k / 2, L.by + L.bh / 2 - k / 2, rect(k, k))
+    out[#out + 1] = text(L.bx0 - 14, L.by + L.bh / 2, 6, L.fs, fmt_time(pos))
+    out[#out + 1] = text(L.bx1 + 14, L.by + L.bh / 2, 4, L.fs, fmt_time(dur))
+
+    -- download arrow (top-left): shaft, head, tray
+    local D = L.D
+    out[#out + 1] = shape(28, 20, string.format(
+        "m %d 0 l %d 0 l %d %d l %d %d m %d %d l %d %d l %d %d m %d %d l %d %d l %d %d l %d %d",
+        f(D * 0.38), f(D * 0.62), f(D * 0.62), f(D * 0.45), f(D * 0.38), f(D * 0.45),
+        f(D * 0.15), f(D * 0.45), f(D * 0.85), f(D * 0.45), f(D * 0.5), f(D * 0.82),
+        f(D * 0.1), f(D * 0.9), f(D * 0.9), f(D * 0.9), f(D * 0.9), D, f(D * 0.1), D))
+    -- close (top-right)
+    out[#out + 1] = text(L.w - 28, 12, 9, L.h * 0.11, "×")
+
+    ov.res_x, ov.res_y = L.w, L.h
+    ov.data = table.concat(out, "\n")
+    ov:update()
+end
+
 local function set_visible(v)
     visible = v
-    mp.commandv("script-message-to", "osc", "osc-visibility", v and "always" or "never", "no-osd")
     if v then
-        local w, h = dims()
-        close_btn.res_x, close_btn.res_y = w, h
-        close_btn.data = string.format("{\\an9\\pos(%d,%d)\\fs%d\\bord3\\1c&HFFFFFF&\\3c&H000000&}×", w - 28, 12, math.floor(h * 0.11))
-        close_btn:update()
+        draw()
+        if tick then tick:resume() else tick = mp.add_periodic_timer(0.5, draw) end
     else
-        close_btn:remove()
+        if tick then tick:stop() end
+        ov:remove()
     end
 end
+
 local function hide()
     if mp.get_property_bool("pause") then
-        timer = mp.add_timeout(5, hide)  -- keep the bar while paused
+        hide_timer = mp.add_timeout(5, hide)  -- keep the controls while paused
         return
     end
     set_visible(false)
 end
+
 local function show()
-    if timer then timer:kill() end
-    if not visible then set_visible(true) end
-    timer = mp.add_timeout(5, hide)
+    if hide_timer then hide_timer:kill() end
+    if visible then draw() else set_visible(true) end
+    hide_timer = mp.add_timeout(5, hide)
 end
+
+local function download()
+    local url = mp.get_property("path", "")
+    if not url:match("^https?://") then
+        mp.osd_message("Nothing to download", 2)
+        return
+    end
+    if downloading[url] then
+        mp.osd_message("Already downloading this video", 2)
+        return
+    end
+    downloading[url] = true
+    local dir = os.getenv("YT_PLAYER_VIDEOS") or ((os.getenv("HOME") or "") .. "/Videos")
+    local fmt = os.getenv("YT_PLAYER_DLFMT") or "best[height<=360][ext=mp4]/best[height<=360]"
+    mp.commandv("run", "sh", "-c",
+        'mkdir -p "$2"; if yt-dlp --no-warnings --no-playlist -f "$1" -o "$2/%(title).80s [%(id)s].%(ext)s" "$3"; ' ..
+        'then notify-send "YT Player" "Video saved to Videos" 2>/dev/null; ' ..
+        'else notify-send "YT Player" "Download failed" 2>/dev/null; fi',
+        "sh", fmt, dir, url)
+    mp.osd_message("Download started - it is saved to Videos when finished", 3)
+end
+
 local function pos()
     local p = mp.get_property_native("mouse-pos")
     return p.x, p.y
 end
+
+local function near(a, b, r) return math.abs(a - b) <= r end
+
 mp.add_key_binding("MBTN_LEFT", "yt-touch", function(t)
     if t.event == "down" then
         local x, y = pos()
         start = { x = x, y = y }
-    elseif t.event == "up" and start then
-        local x, y = pos()
-        local dx, dy = x - start.x, y - start.y
-        start = nil
-        local w, h = dims()
-        if math.abs(dx) > w * 0.06 and math.abs(dx) > math.abs(dy) then
-            local secs = math.floor(dx / w * 120)
-            mp.commandv("seek", secs, "relative")
-            mp.osd_message(string.format("%+d s", secs), 1.5)
-        elseif math.abs(dy) > h * 0.08 then
-            mp.commandv("add", "volume", math.floor(-dy / h * 60))
-            mp.osd_message("Volume " .. math.floor(mp.get_property_number("volume", 0)), 1.5)
-        elseif visible and x > w * 0.86 and y < h * 0.18 then
-            mp.commandv("quit")  -- the × in the top-right corner
-        elseif visible then
-            if timer then timer:kill() end
-            set_visible(false)
-        else
-            show()
-        end
+        return
+    end
+    if t.event ~= "up" or not start then return end
+    local x, y = pos()
+    local sx, sy = start.x, start.y
+    local dx, dy = x - sx, y - sy
+    start = nil
+    local L = layout()
+    local w, h = L.w, L.h
+
+    -- touch that began on the seek bar: jump to where the finger ended
+    if visible and sy > h * 0.80 and sx > L.bx0 - 40 and sx < L.bx1 + 40 then
+        local frac = math.max(0, math.min(1, (x - L.bx0) / (L.bx1 - L.bx0)))
+        mp.commandv("seek", string.format("%.2f", frac * 100), "absolute-percent")
+        show()
+        return
+    end
+    if math.abs(dx) > w * 0.06 and math.abs(dx) > math.abs(dy) then
+        local secs = math.floor(dx / w * 120)
+        mp.commandv("seek", secs, "relative")
+        mp.osd_message(string.format("%+d s", secs), 1.5)
+        if visible then show() end
+        return
+    end
+    if math.abs(dy) > h * 0.08 then
+        mp.commandv("add", "volume", math.floor(-dy / h * 60))
+        mp.osd_message("Volume " .. math.floor(mp.get_property_number("volume", 0)), 1.5)
+        return
+    end
+    if not visible then
+        show()
+        return
+    end
+    -- taps on the controls
+    if x > w * 0.86 and y < h * 0.18 then
+        mp.commandv("quit")
+    elseif x < w * 0.14 and y < h * 0.20 then
+        download()
+        show()
+    elseif near(y, L.cy, L.S * 0.8) and near(x, L.cx, L.S * 0.9) then
+        mp.commandv("cycle", "pause")
+        show()
+    elseif near(y, L.cy, L.S * 0.8) and near(x, L.cx - L.gap, L.S * 0.9) then
+        mp.commandv("seek", -10, "relative")
+        show()
+    elseif near(y, L.cy, L.S * 0.8) and near(x, L.cx + L.gap, L.S * 0.9) then
+        mp.commandv("seek", 10, "relative")
+        show()
+    else
+        if hide_timer then hide_timer:kill() end
+        set_visible(false)
     end
 end, { complex = true })
--- using the bar (pause, seek) keeps it on screen for another 5 seconds
-mp.register_event("seek", function() if visible then show() end end)
-mp.observe_property("pause", "bool", function() if visible then show() end end)
+
+mp.observe_property("pause", "bool", function() if visible then draw() end end)
 """
 
 CSS = b"""
@@ -375,7 +527,9 @@ class Window(Gtk.ApplicationWindow):
         if self.player is not None and self.player.poll() is None:
             return
         try:
-            self.player = subprocess.Popen(MPV_ARGS + [url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            env = dict(os.environ, YT_PLAYER_VIDEOS=VIDEOS, YT_PLAYER_DLFMT=DOWNLOAD_FORMAT)
+            self.player = subprocess.Popen(MPV_ARGS + [url], env=env,
+                                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except OSError as e:
             self.show_toast("Could not start mpv: %s" % e)
             return
