@@ -30,7 +30,7 @@ TOUCH_LUA = os.path.join(GLib.get_user_config_dir(), "yt-player", "yt-touch.lua"
 MPV_ARGS = [
     "mpv", "--fs", "--profile=fast", "--ytdl-format=" + PLAY_FORMAT, "--osc=yes",
     # finger-sized control bar: shown on touch, hidden again after 5 seconds
-    "--script-opts=osc-visibility=auto,osc-hidetimeout=5000,osc-minmousemove=0,"
+    "--script-opts=osc-visibility=never,"
     "osc-layout=bottombar,osc-scalefullscreen=1.8,osc-scalewindowed=1.8,osc-windowcontrols=yes",
     "--input-conf=" + INPUT_CONF,
     "--script=" + TOUCH_LUA,
@@ -38,7 +38,26 @@ MPV_ARGS = [
 # Touch gestures for mpv: tap = show the control bar, slide left/right = seek,
 # slide up/down = volume. The control bar keeps handling its own buttons.
 TOUCH_SCRIPT = r"""
-local start = nil
+local start, visible, timer = nil, false, nil
+local function osc(mode)
+    mp.commandv("script-message-to", "osc", "osc-visibility", mode, "no-osd")
+end
+local function hide()
+    if mp.get_property_bool("pause") then
+        timer = mp.add_timeout(5, hide)  -- keep the bar while paused
+        return
+    end
+    visible = false
+    osc("never")
+end
+local function show()
+    if timer then timer:kill() end
+    if not visible then
+        visible = true
+        osc("always")
+    end
+    timer = mp.add_timeout(5, hide)
+end
 local function pos()
     local p = mp.get_property_native("mouse-pos")
     return p.x, p.y
@@ -60,11 +79,18 @@ mp.add_key_binding("MBTN_LEFT", "yt-touch", function(t)
         elseif math.abs(dy) > h * 0.08 then
             mp.commandv("add", "volume", math.floor(-dy / h * 60))
             mp.osd_message("Volume " .. math.floor(mp.get_property_number("volume", 0)), 1.5)
+        elseif visible then
+            if timer then timer:kill() end
+            visible = false
+            osc("never")
         else
-            mp.commandv("script-message-to", "osc", "osc-show")
+            show()
         end
     end
 end, { complex = true })
+-- using the bar (pause, seek) keeps it on screen for another 5 seconds
+mp.register_event("seek", function() if visible then show() end end)
+mp.observe_property("pause", "bool", function() if visible then show() end end)
 """
 
 CSS = b"""
