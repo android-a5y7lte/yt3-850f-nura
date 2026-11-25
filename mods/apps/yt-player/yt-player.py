@@ -29,6 +29,10 @@ INPUT_CONF = os.path.join(GLib.get_user_config_dir(), "yt-player", "input.conf")
 TOUCH_LUA = os.path.join(GLib.get_user_config_dir(), "yt-player", "yt-touch.lua")
 MPV_ARGS = [
     "mpv", "--fs", "--profile=fast", "--ytdl-format=" + PLAY_FORMAT, "--osc=yes",
+    # mpv's default renderer (gpu-next/libplacebo) cannot compile its overlay shader
+    # on this tablet's Adreno 304, so nothing is drawn over the video (no control
+    # bar, no messages). The older gpu renderer with OpenGL ES works.
+    "--vo=gpu", "--opengl-es=yes",
     # finger-sized control bar: shown on touch, hidden again after 5 seconds
     "--script-opts=osc-visibility=never,"
     "osc-layout=bottombar,osc-scalefullscreen=1.8,osc-scalewindowed=1.8,osc-windowcontrols=yes",
