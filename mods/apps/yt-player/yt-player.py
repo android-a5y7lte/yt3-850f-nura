@@ -34,8 +34,10 @@ MPV_ARGS = [
     # bar, no messages). The older gpu renderer with OpenGL ES works.
     "--vo=gpu", "--opengl-es=yes",
     # finger-sized control bar: shown on touch, hidden again after 5 seconds
-    "--script-opts=osc-visibility=never,"
-    "osc-layout=bottombar,osc-scalefullscreen=1.8,osc-scalewindowed=1.8,osc-windowcontrols=yes",
+    # one-line, see-through bar; no desktop-style title bar (the gesture script
+    # draws its own close button instead)
+    "--script-opts=osc-visibility=never,osc-layout=slimbottombar,osc-boxalpha=200,"
+    "osc-scalefullscreen=1.8,osc-scalewindowed=1.8,osc-windowcontrols=no",
     "--input-conf=" + INPUT_CONF,
     "--script=" + TOUCH_LUA,
 ]
@@ -43,23 +45,32 @@ MPV_ARGS = [
 # slide up/down = volume. The control bar keeps handling its own buttons.
 TOUCH_SCRIPT = r"""
 local start, visible, timer = nil, false, nil
-local function osc(mode)
-    mp.commandv("script-message-to", "osc", "osc-visibility", mode, "no-osd")
+local close_btn = mp.create_osd_overlay("ass-events")
+local function dims()
+    return mp.get_property_number("osd-width", 1280), mp.get_property_number("osd-height", 800)
+end
+local function set_visible(v)
+    visible = v
+    mp.commandv("script-message-to", "osc", "osc-visibility", v and "always" or "never", "no-osd")
+    if v then
+        local w, h = dims()
+        close_btn.res_x, close_btn.res_y = w, h
+        close_btn.data = string.format("{\\an9\\pos(%d,%d)\\fs%d\\bord3\\1c&HFFFFFF&\\3c&H000000&}×", w - 28, 12, math.floor(h * 0.11))
+        close_btn:update()
+    else
+        close_btn:remove()
+    end
 end
 local function hide()
     if mp.get_property_bool("pause") then
         timer = mp.add_timeout(5, hide)  -- keep the bar while paused
         return
     end
-    visible = false
-    osc("never")
+    set_visible(false)
 end
 local function show()
     if timer then timer:kill() end
-    if not visible then
-        visible = true
-        osc("always")
-    end
+    if not visible then set_visible(true) end
     timer = mp.add_timeout(5, hide)
 end
 local function pos()
@@ -74,8 +85,7 @@ mp.add_key_binding("MBTN_LEFT", "yt-touch", function(t)
         local x, y = pos()
         local dx, dy = x - start.x, y - start.y
         start = nil
-        local w = mp.get_property_number("osd-width", 1280)
-        local h = mp.get_property_number("osd-height", 800)
+        local w, h = dims()
         if math.abs(dx) > w * 0.06 and math.abs(dx) > math.abs(dy) then
             local secs = math.floor(dx / w * 120)
             mp.commandv("seek", secs, "relative")
@@ -83,10 +93,11 @@ mp.add_key_binding("MBTN_LEFT", "yt-touch", function(t)
         elseif math.abs(dy) > h * 0.08 then
             mp.commandv("add", "volume", math.floor(-dy / h * 60))
             mp.osd_message("Volume " .. math.floor(mp.get_property_number("volume", 0)), 1.5)
+        elseif visible and x > w * 0.86 and y < h * 0.18 then
+            mp.commandv("quit")  -- the × in the top-right corner
         elseif visible then
             if timer then timer:kill() end
-            visible = false
-            osc("never")
+            set_visible(false)
         else
             show()
         end
