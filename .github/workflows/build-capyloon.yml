@@ -119,6 +119,8 @@ jobs:
             case "$n" in
               # We use rustup's armv7-unknown-linux-musleabihf, not Alpine's triple.
               *rust-target*) echo "SKIP  $n"; continue ;;
+              # for system ICU 74; we build the bundled ICU.
+              icu74*) echo "SKIP  $n"; continue ;;
             esac
             if patch -p1 -N --dry-run -s < "$p" >/dev/null 2>&1; then
               patch -p1 -N -s < "$p" && echo "OK    $n"
@@ -142,7 +144,7 @@ jobs:
             gtk+3.0-dev glib-dev pango-dev cairo-dev gdk-pixbuf-dev at-spi2-core-dev \
             dbus-dev dbus-glib-dev fontconfig-dev freetype-dev \
             wayland-dev wayland-protocols libxkbcommon-dev mesa-dev libdrm-dev \
-            pulseaudio-dev alsa-lib-dev pipewire-dev libffi-dev zlib-dev pixman-dev
+            pulseaudio-dev alsa-lib-dev pipewire-dev libffi-dev zlib-dev pixman-dev libevent-dev
           sudo chown -R "$(id -u):$(id -g)" "$SYS"
           du -sh "$SYS"
           ls "$SYS/usr/lib/gcc/"*/ || true
@@ -159,8 +161,8 @@ jobs:
           # mozconfig-b2g-mobian, retargeted: armv7 + musl, no LTO, no debug info.
           . \$topsrcdir/mozconfig-capyloon-env
           export TOOLCHAIN_PREFIX="llvm-"
-          export CC="clang --gcc-install-dir=${GCCDIR}"
-          export CXX="clang++ --gcc-install-dir=${GCCDIR}"
+          export CC="clang --gcc-install-dir=${GCCDIR} -mfpu=neon"
+          export CXX="clang++ --gcc-install-dir=${GCCDIR} -mfpu=neon"
           export BINDGEN_CFLAGS="--gcc-install-dir=${GCCDIR}"
           export HOST_CC=clang
           export HOST_CXX=clang++
@@ -191,6 +193,7 @@ jobs:
           ac_add_options --disable-crashreporter
           ac_add_options --disable-jemalloc
           ac_add_options --enable-system-pixman
+          ac_add_options --with-system-libevent
           ac_add_options --disable-profiling
           ac_add_options --without-wasm-sandboxed-libraries
           ac_add_options --enable-safebrowsing
