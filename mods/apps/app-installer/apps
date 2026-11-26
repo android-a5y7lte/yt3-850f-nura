@@ -1,0 +1,50 @@
+#!/bin/sh
+# App Installer for Nura (Alpine apk) - simple terminal finder/installer.
+# Usage: run `apps` in the Console. Type a search word, pick a number to install.
+C_T='\033[1m'; C_N='\033[36m'; C_G='\033[32m'; C_0='\033[0m'
+[ -t 1 ] || { C_T=; C_N=; C_G=; C_0=; }
+
+search() {
+  q="$1"; raw=$(mktemp); list=$(mktemp)
+  { apk search -v "$q" 2>/dev/null; apk search -v -d "$q" 2>/dev/null; } | sort -u > "$raw"
+  i=0; : > "$list"
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    nv=${line%% *}; desc=${line#* }; [ "$desc" = "$line" ] && desc=""
+    name=${nv%-r[0-9]*}; name=${name%-*}
+    case "$name" in
+      *-dev|*-doc|*-dbg|*-static|*-openrc|*-lang|*-pyc|*-bash-completion|*-zsh-completion|*-fish-completion|*-vim|*-emacs) continue;;
+    esac
+    grep -qx "$name" "$list.seen" 2>/dev/null && continue
+    echo "$name" >> "$list.seen"
+    i=$((i+1)); [ "$i" -gt 30 ] && { i=30; break; }
+    if apk info -e "$name" >/dev/null 2>&1; then mark="${C_G}[installed]${C_0}"; else mark=""; fi
+    echo "$name" >> "$list"
+    printf '%s%2d%s  %s  %s\n     %s\n' "$C_N" "$i" "$C_0" "$name" "$mark" "$desc"
+  done < "$raw"
+  rm -f "$raw" "$list.seen"
+  LISTFILE="$list"; COUNT="$i"
+}
+
+while :; do
+  printf "\n${C_T}Search for an app (q to quit):${C_0} "
+  read -r q || break
+  [ "$q" = q ] && break
+  [ -z "$q" ] && continue
+  search "$q"
+  if [ "${COUNT:-0}" -eq 0 ]; then echo "No matching apps."; rm -f "$LISTFILE"; continue; fi
+  printf "\n${C_T}Number to install  (r5 = remove #5,  Enter = new search):${C_0} "
+  read -r sel
+  if [ -z "$sel" ]; then rm -f "$LISTFILE"; continue; fi
+  op=add; num=$sel
+  case "$sel" in r*) op=del; num=${sel#r};; esac
+  if ! echo "$num" | grep -qE '^[0-9]+$'; then echo "Please type a number."; rm -f "$LISTFILE"; continue; fi
+  name=$(sed -n "${num}p" "$LISTFILE"); rm -f "$LISTFILE"
+  [ -z "$name" ] && { echo "No app with that number."; continue; }
+  if [ "$op" = del ]; then
+    printf "${C_T}Remove %s? (y/N):${C_0} " "$name"; read -r ok
+    [ "$ok" = y ] && sudo apk del "$name"
+  else
+    echo "Installing $name ..."; sudo apk add "$name" && echo "${C_G}Done. Find it in the app grid.${C_0}"
+  fi
+done
