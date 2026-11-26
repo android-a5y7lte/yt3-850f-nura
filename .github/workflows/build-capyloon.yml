@@ -161,14 +161,16 @@ jobs:
           # mozconfig-b2g-mobian, retargeted: armv7 + musl, no LTO, no debug info.
           . \$topsrcdir/mozconfig-capyloon-env
           export TOOLCHAIN_PREFIX="llvm-"
-          export CC="clang --gcc-install-dir=${GCCDIR} -mfpu=neon"
-          export CXX="clang++ --gcc-install-dir=${GCCDIR} -mfpu=neon"
+          export CC="clang --gcc-install-dir=${GCCDIR}"
+          export CXX="clang++ --gcc-install-dir=${GCCDIR}"
           export BINDGEN_CFLAGS="--gcc-install-dir=${GCCDIR}"
           export HOST_CC=clang
           export HOST_CXX=clang++
           export RUSTFLAGS="-C target-feature=-crt-static"
           # b2g code uses glibc-isms such as uint without including the header.
-          export CXXFLAGS="-include sys/types.h"
+          export CXXFLAGS="-include sys/types.h -mfpu=neon"
+          export CFLAGS="-mfpu=neon"
+          export ASFLAGS="-mfpu=neon"
 
           ac_add_options --target=${TARGET}
           ac_add_options --with-sysroot=${SYSROOT}
