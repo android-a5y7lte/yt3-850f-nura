@@ -193,6 +193,17 @@ jobs:
           mk_add_options AUTOCLOBBER=1
           EOF
           sed -i 's/^          //' gecko/mozconfig-b2g-yt3
+          # Gecko's guess for the Rust target ignores musl and lands on
+          # thumbv7neon-unknown-linux-gnueabihf. Pin the target's Rust triple.
+          python3 - gecko/build/moz.configure/rust.configure "$RUST_TARGET" <<'PY'
+          import sys
+          p, t = sys.argv[1], sys.argv[2]
+          s = open(p).read()
+          old = "rustc_target = detect_rustc_target(\n        target, compiler_info, arm_target, rust_supported_targets\n    )"
+          assert s.count(old) == 1, "rust_target_triple call not found"
+          open(p, "w").write(s.replace(old, 'rustc_target = "%s"' % t))
+          print("pinned rust target to", t)
+          PY
           cat gecko/mozconfig-b2g-yt3
 
       - name: mach configure
