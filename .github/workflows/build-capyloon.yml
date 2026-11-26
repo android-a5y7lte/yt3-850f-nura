@@ -1,0 +1,215 @@
+name: Build Capyloon b2g shell (armv7/musl)
+
+# Capyloon is the living, fully open Firefox OS / B2G revival. Its Linux form
+# factor is an ordinary GTK3 Gecko build (the aarch64-linux-gnu prebuilt is the
+# PinePhone/Librem5 build: mainline Linux, Wayland, no Gonk). We want the same
+# thing one step further: armv7 + musl, so it runs on Nura (Alpine) on the
+# YT3-850F as a SWITCHABLE Wayland session alongside Phosh.
+#
+# Gecko is far too large to compile under qemu-arm emulation inside CI's 6h
+# ceiling (unlike Mesa), so this CROSS-compiles on the x86_64 runner, targeting
+# armv7-unknown-linux-musleabihf against an Alpine armv7 sysroot.
+#
+# Because the exact mozconfig/target wiring in gecko-b2g's capyloon branch is
+# unknown, this runs in three stages (workflow_dispatch input):
+#   recon     - clone + bootstrap + DUMP every mozconfig / arm-target / widget
+#               option in the tree, so we configure the real build from fact.
+#   configure - build the Alpine armv7 musl sysroot, write the mozconfig, and
+#               run ./mach configure (fast; surfaces the real blockers).
+#   build     - ./mach build, package b2g, publish a release.
+# Default is recon: cheap, and it tells us how it is actually wired.
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "recon | configure | build"
+        default: recon
+        required: true
+      branch:
+        description: "gecko-b2g branch"
+        default: capyloon
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TARGET: armv7-unknown-linux-musleabihf
+  ALPINE_ARCH: armv7
+  ALPINE_BRANCH: edge
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free up disk
+        run: |
+          set -eux
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - name: Host build deps
+        run: |
+          set -eux
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            git python3 python3-pip curl xz-utils zstd \
+            clang lld llvm pkg-config \
+            build-essential ca-certificates mercurial
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Shallow clone gecko-b2g
+        run: |
+          set -eux
+          B="${{ github.event.inputs.branch }}"
+          # Full history is ~870k commits; depth 1 of the one branch is enough to build.
+          git clone --depth 1 -b "$B" https://github.com/capyloon/gecko-b2g gecko \
+            || git clone --depth 1 https://github.com/capyloon/gecko-b2g gecko
+          cd gecko
+          echo "branch: $(git rev-parse --abbrev-ref HEAD)  head: $(git rev-parse --short HEAD)"
+          du -sh . || true
+
+      - name: Recon - how is the arm / Linux target wired
+        run: |
+          set -eux
+          cd gecko
+          mkdir -p ../recon
+          {
+            echo "######## b2g config dir ########"
+            find b2g/config -maxdepth 3 -type f 2>/dev/null | sort || true
+            echo; echo "######## mozconfig files in tree ########"
+            find . -maxdepth 4 -iname 'mozconfig*' 2>/dev/null | sort || true
+            echo; echo "######## any existing arm/aarch64 mozconfigs (contents) ########"
+            for f in $(find . -maxdepth 5 -iname 'mozconfig*' 2>/dev/null); do
+              if grep -qiE 'arm|aarch64|gonk|gtk|wayland|b2g' "$f"; then
+                echo "==== $f ===="; cat "$f"; echo
+              fi
+            done
+            echo; echo "######## widget/toolkit options (gtk vs gonk) ########"
+            grep -risnE 'cairo-gtk3-wayland|MOZ_WIDGET_GTK|MOZ_WAYLAND|widget/gonk|MOZ_B2G' \
+              b2g/ toolkit/moz.configure build/ 2>/dev/null | head -80 || true
+            echo; echo "######## target arm handling in moz.configure ########"
+            grep -risnE 'armv7|arm-|eabihf|musl|android-arm|target' build/moz.configure/*.configure 2>/dev/null | head -80 || true
+            echo; echo "######## in-tree b2g build docs ########"
+            find b2g -maxdepth 2 -iname '*.md' -o -iname 'README*' 2>/dev/null | head || true
+            echo; echo "######## expected gecko package name (nutria consumes b2g-*.tar.*) ########"
+            grep -risnE 'b2g-.*linux|MOZ_PKG_FORMAT|package' b2g/installer/ 2>/dev/null | head -40 || true
+          } | tee ../recon/gecko-arm-recon.txt
+
+      - name: mach bootstrap (b2g)
+        if: ${{ github.event.inputs.stage != 'recon' }}
+        run: |
+          set -eux
+          cd gecko
+          # Non-interactive bootstrap of the b2g/browser toolchain into ~/.mozbuild.
+          ./mach --no-interactive bootstrap --application-choice=browser || \
+          ./mach --no-interactive bootstrap || true
+
+      - name: Assemble Alpine armv7 (musl) sysroot
+        if: ${{ github.event.inputs.stage != 'recon' }}
+        run: |
+          set -eux
+          SYS="$PWD/sysroot"
+          mkdir -p "$SYS"
+          # apk.static for the host, used to install armv7 packages into a sysroot.
+          CDN="https://dl-cdn.alpinelinux.org/alpine/${ALPINE_BRANCH}"
+          AST=$(curl -s "$CDN/main/x86_64/" | grep -oE 'apk-tools-static-[0-9][^"]*\.apk' | sort -V | tail -1)
+          curl -sSL "$CDN/main/x86_64/$AST" -o ast.apk
+          tar -xzf ast.apk -C . 2>/dev/null || tar -xf ast.apk -C .
+          APK="$PWD/sbin/apk.static"
+          for repo in main community; do
+            "$APK" --arch "$ALPINE_ARCH" -X "$CDN/$repo" -U --allow-untrusted \
+              --root "$SYS" --initdb add \
+              musl-dev gtk+3.0-dev glib-dev cairo-dev pango-dev gdk-pixbuf-dev \
+              fontconfig-dev freetype-dev libxkbcommon-dev wayland-dev \
+              mesa-dev dbus-dev pulseaudio-dev alsa-lib-dev \
+              zlib-dev libffi-dev pixman-dev || true
+          done
+          echo "SYSROOT=$SYS" >> "$GITHUB_ENV"
+          du -sh "$SYS"; ls "$SYS"
+
+      - name: Write armv7/musl mozconfig
+        if: ${{ github.event.inputs.stage != 'recon' }}
+        run: |
+          set -eux
+          cd gecko
+          cat > ../mozconfig.armv7 <<EOF
+          # --- Capyloon b2g shell, cross armv7-musl, GTK3/Wayland (no Gonk) ---
+          ac_add_options --enable-application=b2g
+          ac_add_options --enable-default-toolkit=cairo-gtk3-wayland
+          ac_add_options --target=${TARGET}
+          ac_add_options --with-sysroot=${SYSROOT}
+          ac_add_options --enable-linker=lld
+          ac_add_options --disable-debug
+          ac_add_options --enable-release
+          ac_add_options --disable-tests
+          ac_add_options --disable-crashreporter
+          ac_add_options --disable-updater
+          mk_add_options MOZ_OBJDIR=@TOPSRCDIR@/obj-armv7
+
+          export CC="clang --target=${TARGET} --sysroot=${SYSROOT}"
+          export CXX="clang++ --target=${TARGET} --sysroot=${SYSROOT}"
+          export AR=llvm-ar
+          export RANLIB=llvm-ranlib
+          export PKG_CONFIG_SYSROOT_DIR=${SYSROOT}
+          export PKG_CONFIG_LIBDIR=${SYSROOT}/usr/lib/pkgconfig:${SYSROOT}/usr/share/pkgconfig
+          EOF
+          echo "MOZCONFIG=$PWD/../mozconfig.armv7" >> "$GITHUB_ENV"
+          rustup target add ${TARGET} || true
+          cat ../mozconfig.armv7
+
+      - name: mach configure
+        if: ${{ github.event.inputs.stage != 'recon' }}
+        run: |
+          set -eux
+          cd gecko
+          export MOZCONFIG="${MOZCONFIG}"
+          # Configure is quick and prints the real blockers (missing sysroot libs,
+          # unsupported target, widget backend) without the multi-hour compile.
+          set +e
+          ./mach configure 2>&1 | tee ../recon/configure.log
+          echo "configure exit: ${PIPESTATUS[0]}" | tee -a ../recon/configure.log
+          set -e
+          cp -f obj-armv7/config.log ../recon/config.log 2>/dev/null || true
+
+      - name: mach build + package
+        if: ${{ github.event.inputs.stage == 'build' }}
+        run: |
+          set -eux
+          cd gecko
+          export MOZCONFIG="${MOZCONFIG}"
+          ./mach build
+          ./mach package || true
+          mkdir -p ../out
+          find obj-armv7 -maxdepth 3 -name 'b2g-*.tar.*' -exec cp -v {} ../out/ \; || true
+          # Fall back to the raw dist/ dir if package didn't emit a tarball.
+          if [ -z "$(ls ../out 2>/dev/null)" ] && [ -d obj-armv7/dist/b2g ]; then
+            tar -C obj-armv7/dist -cJf "../out/b2g-armv7-musl.tar.xz" b2g
+          fi
+          ls -la ../out
+
+      - name: Upload recon/configure logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: capyloon-recon
+          path: recon/
+          if-no-files-found: ignore
+
+      - name: Publish release (build stage)
+        if: ${{ github.event.inputs.stage == 'build' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eux
+          [ -n "$(ls out 2>/dev/null)" ] || { echo "no b2g artifact produced"; exit 1; }
+          sha256sum out/* | tee out/SHA256SUMS.txt
+          TAG="capyloon-b2g-armv7-$(date +%Y%m%d-%H%M)"
+          gh release create "$TAG" out/* \
+            --title "Capyloon b2g shell (armv7/musl) $(date +%Y-%m-%d)" \
+            --notes "Experimental Gecko b2g shell for Nura on the YT3-850F. Switchable Wayland session alongside Phosh."

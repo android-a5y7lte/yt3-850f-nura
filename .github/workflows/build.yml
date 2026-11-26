@@ -288,6 +288,14 @@ jobs:
             sudo ln -sf /etc/systemd/system/$svc \
                 mnt_mods/etc/systemd/system/multi-user.target.wants/$svc
           done
+          # SSH must come up at boot on its own, before and independent of the
+          # graphical session, so the tablet stays reachable even if the Wayland
+          # shell (Phosh today, Capyloon later) fails to start. sshd is a
+          # multi-user.target service, so enabling it here guarantees access from
+          # first boot regardless of greetd. A dangling symlink is harmless if the
+          # unit lives elsewhere, and the ls below shows which path resolved.
+          sudo ln -sf /usr/lib/systemd/system/sshd.service \
+              mnt_mods/etc/systemd/system/multi-user.target.wants/sshd.service
           # NetworkManager requires its system-connections to be 0600 root:root
           for nm in mnt_mods/etc/NetworkManager/system-connections/*.nmconnection; do
             [ -f "$nm" ] || continue
