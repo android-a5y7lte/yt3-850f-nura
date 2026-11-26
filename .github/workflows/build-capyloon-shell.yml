@@ -43,7 +43,7 @@ jobs:
         run: |
           set -eux
           sudo apt-get update -qq
-          sudo apt-get install -y -qq clang-17 lld-17 llvm-17 pkg-config curl xz-utils bzip2 dpkg protobuf-compiler
+          sudo apt-get install -y -qq clang-17 lld-17 llvm-17 pkg-config curl xz-utils bzip2 dpkg protobuf-compiler libselinux1-dev
           rustup toolchain install "$RUST_VERSION" --profile minimal
           rustup default "$RUST_VERSION"
           rustup target add "$RUST_TARGET"
@@ -57,7 +57,7 @@ jobs:
           curl -sSL "$CDN/main/x86_64/$AST" -o ast.apk
           mkdir ast && tar -xzf ast.apk -C ast 2>/dev/null
           sudo ast/sbin/apk.static --arch "$ALPINE_ARCH" -X "$CDN/main" -X "$CDN/community" -U --allow-untrusted \
-            --no-scripts --root "$SYS" --initdb add musl-dev gcc g++ linux-headers
+            --no-scripts --root "$SYS" --initdb add musl-dev gcc g++ linux-headers libselinux-dev
           sudo chown -R "$(id -u):$(id -g)" "$SYS"
           GCCDIR=$(ls -d "$SYS"/usr/lib/gcc/armv7-alpine-linux-musleabihf/* | tail -1)
           mkdir -p "$PWD/xbin"
