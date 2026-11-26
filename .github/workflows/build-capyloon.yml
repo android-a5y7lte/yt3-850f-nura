@@ -112,7 +112,7 @@ jobs:
           git fetch -q --depth 1 --filter=blob:none origin "$SHA"
           git checkout -q FETCH_HEAD
           grep -E '^(pkgver|arch)=' community/firefox/APKBUILD
-          sed -n '/^build()/,/^}/p' community/firefox/APKBUILD
+          sed -n '/base-mozconfig/,/EOF/p' community/firefox/APKBUILD
           cd ../gecko
           for p in ../aports/community/firefox/*.patch; do
             n=$(basename "$p")
@@ -187,6 +187,8 @@ jobs:
           ac_add_options --disable-debug
           ac_add_options --disable-debug-symbols
           ac_add_options --disable-crashreporter
+          ac_add_options --disable-jemalloc
+          ac_add_options --disable-profiling
           ac_add_options --without-wasm-sandboxed-libraries
           ac_add_options --enable-safebrowsing
           mk_add_options MOZ_OBJDIR=@TOPSRCDIR@/obj-armv7
