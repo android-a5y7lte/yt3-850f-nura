@@ -199,12 +199,18 @@ jobs:
           export NUTRIA_B2GHALCTL_BINARY="$GITHUB_WORKSPACE/daemons/b2ghalctl"
           export NUTRIA_IPFSD_BINARY="$PWD/ipfsd-stub"
           export NUTRIA_API_DAEMON_PORT=8081
+          export NUTRIA_APPS_ROOT="$PWD/apps"
+          export NUTRIA_API_DAEMON_ROOT="$PWD"
+          mkdir -p prebuilts && tar -xf "$PKG" -C prebuilts
+          export NUTRIA_B2G_BINARY="$PWD/prebuilts/b2g/b2g"
+          ls -la prebuilts/b2g | head -20
           rc=0
           ./jackady deb --device pinephone > ../nutria.log 2>&1 || rc=$?
           set +e
           tail -n 120 ../nutria.log | cut -c1-300
           ls -la builder/output/debian/ 2>/dev/null
           [ "$rc" = 0 ] || exit "$rc"
+          ! grep -q "Command failed" ../nutria.log
           set -e
           DEB=$(ls builder/output/debian/*.deb | head -1)
           mkdir ../tree
