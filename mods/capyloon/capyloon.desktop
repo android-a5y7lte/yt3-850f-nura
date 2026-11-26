@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Capyloon
+Comment=Web based shell (Firefox OS descendant)
+Exec=/opt/capyloon/yt3/yt3-capyloon-session
+Type=Application
+DesktopNames=capyloon

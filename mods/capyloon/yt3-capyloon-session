@@ -1,0 +1,16 @@
+#!/bin/sh
+# Session entry for Capyloon on the YT3-850F: a bare sway compositor whose only
+# client is the b2g shell. Chosen at the login screen next to Phosh.
+LOG="${XDG_RUNTIME_DIR:-/tmp}/capyloon-session.log"
+: > "$LOG"
+# Same GPU hints Phosh's compositor gets, when the Adreno driver is loaded.
+if [ -e /dev/dri/renderD128 ]; then
+  export WLR_RENDER_DRM_DEVICE=/dev/dri/renderD128
+  [ -e /dev/dri/card0 ] && export WLR_DRM_DEVICES=/dev/dri/card0
+else
+  export WLR_RENDERER=pixman
+fi
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=capyloon
+export MOZ_ENABLE_WAYLAND=1
+exec sway -c /opt/capyloon/yt3/sway.config >> "$LOG" 2>&1

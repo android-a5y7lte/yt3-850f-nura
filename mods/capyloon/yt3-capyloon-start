@@ -1,0 +1,34 @@
+#!/bin/sh
+# Starts the Capyloon pieces inside the running compositor: api-daemon, then
+# the b2g shell. When b2g exits the compositor exits too, which returns to the
+# login screen (so a crash never leaves a dead black screen).
+C="$HOME/.capyloon"
+LOG="${XDG_RUNTIME_DIR:-/tmp}/capyloon-start.log"
+exec >> "$LOG" 2>&1
+echo "== capyloon start $(date) WAYLAND_DISPLAY=$WAYLAND_DISPLAY =="
+
+mkdir -p "$C/profile" "$C/api-daemon"
+cp /opt/capyloon/b2g/defaults/pref/user.js "$C/profile/user.js"
+# Adreno 304 is GLES2 only; WebRender needs its software backend there.
+cat >> "$C/profile/user.js" <<'PREFS'
+user_pref("gfx.webrender.software", true);
+user_pref("layers.acceleration.disabled", true);
+PREFS
+sed -e "s#__HOME__#$HOME#g" /opt/capyloon/api-daemon/config.toml > "$C/api-daemon-config.toml"
+
+export RUST_LOG=warn
+export DEFAULT_SETTINGS=/opt/capyloon/api-daemon/default-settings.json
+pkill -u "$(id -u)" -x api-daemon 2>/dev/null
+rm -f /tmp/api-daemon-socket /tmp/apps_service_uds.sock
+( cd "$C/api-daemon" && exec /opt/capyloon/api-daemon/api-daemon "$C/api-daemon-config.toml" ) > /tmp/capyloon_api-daemon.log 2>&1 &
+DAEMON=$!
+
+n=0
+while [ ! -S /tmp/api-daemon-socket ] && [ $n -lt 40 ]; do sleep 1; n=$((n+1)); done
+[ -S /tmp/api-daemon-socket ] || echo "api-daemon socket did not appear after ${n}s (see /tmp/capyloon_api-daemon.log)"
+
+echo "starting b2g"
+/opt/capyloon/b2g/b2g $B2G_ARGS -profile "$C/profile/" > /tmp/capyloon_gecko.log 2>&1
+echo "b2g exited with $?"
+kill "$DAEMON" 2>/dev/null
+swaymsg exit
