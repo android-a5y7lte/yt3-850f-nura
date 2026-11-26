@@ -83,6 +83,22 @@ jobs:
           git clone -q --depth 1 https://github.com/capyloon/api-daemon
           cd api-daemon
           git log -1 --format='%h %cd' --date=short
+          # 32-bit: timespec fields are i32 here. Same fix as upstream b2ghald,
+          # applied to the vendored copy, with its vendor checksum refreshed.
+          python3 - <<'PY'
+          import hashlib, json
+          d = "third-party/b2ghald/"
+          f = d + "src/time.rs"
+          s = open(f).read()
+          old = "time.tv_nsec() / 1_000_000 + time.tv_sec() * 1000"
+          assert s.count(old) == 1
+          open(f, "w").write(s.replace(old, "(time.tv_nsec() as i64) / 1_000_000 + (time.tv_sec() as i64) * 1000"))
+          c = json.load(open(d + ".cargo-checksum.json"))
+          if "src/time.rs" in c.get("files", {}):
+              c["files"]["src/time.rs"] = hashlib.sha256(open(f, "rb").read()).hexdigest()
+          json.dump(c, open(d + ".cargo-checksum.json", "w"))
+          print("patched", f)
+          PY
           rc=0
           (cd daemon && cargo build --release --target "$RUST_TARGET") > ../api-daemon.log 2>&1 || rc=$?
           if [ "$rc" = 0 ]; then
