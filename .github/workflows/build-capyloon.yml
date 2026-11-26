@@ -232,8 +232,9 @@ jobs:
           export MOZCONFIG="$PWD/mozconfig-b2g-yt3"
           export MOZBUILD_STATE_PATH="$HOME/.mozbuild"
           # Stop before the job limit so the compile cache below still gets saved.
-          timeout 285m ./mach build --keep-going > ../build.log 2>&1
-          rc=$?
+          rc=0
+          timeout 285m ./mach build --keep-going > ../build.log 2>&1 || rc=$?
+          set +e
           sed -i "s#$GITHUB_WORKSPACE/##g" ../build.log
           wc -l ../build.log
           echo "======== ERRORS (with context) ========"
