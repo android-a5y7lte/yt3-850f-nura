@@ -203,6 +203,9 @@ jobs:
           mk_add_options AUTOCLOBBER=1
           EOF
           sed -i 's/^          //' gecko/mozconfig-b2g-yt3
+          # clang's assembler wants vmov.i8 where GNU as also takes vmov.u8.
+          sed -i 's/vmov\.u8 /vmov.i8 /' gecko/gfx/ycbcr/yuv_convert_arm.cpp
+          grep -c 'vmov.i8' gecko/gfx/ycbcr/yuv_convert_arm.cpp
           # Gecko's guess for the Rust target ignores musl and lands on
           # thumbv7neon-unknown-linux-gnueabihf. Pin the target's Rust triple.
           python3 - gecko/build/moz.configure/rust.configure "$RUST_TARGET" <<'PY'
