@@ -66,9 +66,32 @@ jobs:
             printf '#!/bin/sh\nexec /usr/bin/%s-17 --target=armv7-alpine-linux-musleabihf --sysroot=%s --gcc-install-dir=%s -mfpu=neon -fuse-ld=lld "$@"\n' "$c" "$SYS" "$GCCDIR" > "xbin/$n"
             chmod +x "xbin/$n"
           done
-          cat xbin/armv7-musl-clang
+          # musl 1.2.4+ no longer links the LFS64 names old Rust libc crates call.
+          cat > xbin/lfs64.c <<'EOF'
+          #include <fcntl.h>
+          #include <stdarg.h>
+          #include <stdio.h>
+          #include <unistd.h>
+          #include <dirent.h>
+          #include <sys/stat.h>
+          #include <sys/mman.h>
+          int open64(const char *p, int fl, ...) { mode_t m = 0; if (fl & (O_CREAT | O_TMPFILE)) { va_list a; va_start(a, fl); m = va_arg(a, mode_t); va_end(a); } return open(p, fl, m); }
+          int openat64(int d, const char *p, int fl, ...) { mode_t m = 0; if (fl & (O_CREAT | O_TMPFILE)) { va_list a; va_start(a, fl); m = va_arg(a, mode_t); va_end(a); } return openat(d, p, fl, m); }
+          off_t lseek64(int fd, off_t o, int w) { return lseek(fd, o, w); }
+          int ftruncate64(int fd, off_t l) { return ftruncate(fd, l); }
+          ssize_t pread64(int fd, void *b, size_t n, off_t o) { return pread(fd, b, n, o); }
+          ssize_t pwrite64(int fd, const void *b, size_t n, off_t o) { return pwrite(fd, b, n, o); }
+          void *mmap64(void *a, size_t l, int pr, int fl, int fd, off_t o) { return mmap(a, l, pr, fl, fd, o); }
+          struct dirent *readdir64(DIR *d) { return readdir(d); }
+          FILE *fopen64(const char *p, const char *m) { return fopen(p, m); }
+          EOF
+          sed -i 's/^          //' xbin/lfs64.c
+          xbin/armv7-musl-clang -O2 -c xbin/lfs64.c -o xbin/lfs64.o
+          printf '#!/bin/sh\nexec %s "$@" %s\n' "$PWD/xbin/armv7-musl-clang" "$PWD/xbin/lfs64.o" > xbin/armv7-musl-link
+          chmod +x xbin/armv7-musl-link
+          cat xbin/armv7-musl-clang xbin/armv7-musl-link
           {
-            echo "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_MUSLEABIHF_LINKER=$PWD/xbin/armv7-musl-clang"
+            echo "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_MUSLEABIHF_LINKER=$PWD/xbin/armv7-musl-link"
             echo "CC_armv7_unknown_linux_musleabihf=$PWD/xbin/armv7-musl-clang"
             echo "CXX_armv7_unknown_linux_musleabihf=$PWD/xbin/armv7-musl-clang++"
             echo "AR_armv7_unknown_linux_musleabihf=/usr/bin/llvm-ar-17"
