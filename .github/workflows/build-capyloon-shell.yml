@@ -135,7 +135,10 @@ jobs:
           echo "======== LAST 60 LINES ========"
           tail -n 60 ../api-daemon.log | cut -c1-300
           ls -la "target/$RUST_TARGET/release/" | head -30
-          exit "$rc"
+          [ "$rc" = 0 ] || exit "$rc"
+          # The web-side client libraries the apps load from the daemon.
+          ./release_libs.sh > ../release_libs.log 2>&1 || { tail -n 40 ../release_libs.log; exit 1; }
+          find prebuilts/http_root -maxdepth 4 | head -40
 
       - name: Build b2ghald and b2ghalctl
         run: |
@@ -202,6 +205,7 @@ jobs:
           export NUTRIA_APPS_ROOT="$PWD/apps"
           export NUTRIA_API_DAEMON_ROOT="$PWD"
           mkdir -p prebuilts && tar -xf "$PKG" -C prebuilts
+          cp -r "$GITHUB_WORKSPACE/api-daemon/prebuilts/http_root" prebuilts/
           export NUTRIA_B2G_BINARY="$PWD/prebuilts/b2g/b2g"
           ls -la prebuilts/b2g | head -20
           rc=0
