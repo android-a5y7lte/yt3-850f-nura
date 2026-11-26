@@ -157,6 +157,7 @@ class Win(Gtk.ApplicationWindow):
         self.entry.set_placeholder_text("Search apps")
         self.entry.set_hexpand(True)
         self.entry.connect("activate", self.on_search)
+        self.entry.set_can_focus(True)
         bar.pack_start(self.back, False, False, 0)
         bar.pack_start(self.entry, True, True, 0)
         root.pack_start(bar, False, False, 0)
@@ -228,6 +229,7 @@ class Win(Gtk.ApplicationWindow):
     def go_home(self):
         self.back.set_visible(False)
         self.stack.set_visible_child_name("home")
+        self.set_focus(None)
 
     def busy_page(self, text):
         self.status.set_text(text)
@@ -475,6 +477,7 @@ class App(Gtk.Application):
         win = self.get_active_window() or Win(self)
         win.show_all()
         win.present()
+        GLib.idle_add(lambda: (win.set_focus(None), False)[1])
 
 
 if __name__ == "__main__":
