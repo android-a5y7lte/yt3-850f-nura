@@ -143,7 +143,7 @@ jobs:
           git clone -q --depth 1 https://github.com/capyloon/b2ghald
           cd b2ghald
           rc=0
-          cargo build --release --target "$RUST_TARGET" > ../b2ghald.log 2>&1 || rc=$?
+          cargo build --release --features=cmdline --target "$RUST_TARGET" > ../b2ghald.log 2>&1 || rc=$?
           set +e
           grep -nE '^error|could not compile' -A14 ../b2ghald.log | cut -c1-400 | head -n 300
           tail -n 30 ../b2ghald.log | cut -c1-300
