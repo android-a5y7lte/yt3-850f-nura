@@ -126,28 +126,23 @@ class Win(Gtk.ApplicationWindow):
 
         # home
         home_sc = Gtk.ScrolledWindow()
-        home = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
-        home.set_border_width(20)
-        h1 = Gtk.Label(label="Categories", xalign=0)
+        home = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+        home.set_border_width(24)
+        home.set_valign(Gtk.Align.START)
+        h1 = Gtk.Label(label="Software Lite", xalign=0)
         h1.get_style_context().add_class("h1")
         home.pack_start(h1, False, False, 0)
-        cats = Gtk.FlowBox()
-        cats.set_selection_mode(Gtk.SelectionMode.NONE)
-        cats.set_min_children_per_line(2)
-        cats.set_max_children_per_line(4)
-        cats.set_column_spacing(12)
-        cats.set_row_spacing(12)
-        cats.set_homogeneous(True)
-        for label, query in CATEGORIES:
-            b = Gtk.Button(label=label)
-            b.get_style_context().add_class("cat")
-            b.connect("clicked", self.on_category, label, query)
-            cats.add(b)
-        home.pack_start(cats, False, False, 0)
-        inst = Gtk.Button(label="Installed apps")
-        inst.get_style_context().add_class("cat")
-        inst.connect("clicked", lambda *_: self.show_installed())
-        home.pack_start(inst, False, False, 0)
+        b_new = Gtk.Button(label="New & Updated")
+        b_new.get_style_context().add_class("cat")
+        b_new.connect("clicked", lambda *_: self.show_new_updated())
+        home.pack_start(b_new, False, False, 0)
+        b_inst = Gtk.Button(label="Installed apps")
+        b_inst.get_style_context().add_class("cat")
+        b_inst.connect("clicked", lambda *_: self.show_installed())
+        home.pack_start(b_inst, False, False, 0)
+        hint = Gtk.Label(label="Or search for any app above.", xalign=0)
+        hint.get_style_context().add_class("sum")
+        home.pack_start(hint, False, False, 0)
         home_sc.add(home)
         self.stack.add_named(home_sc, "home")
 
@@ -236,12 +231,39 @@ class Win(Gtk.ApplicationWindow):
         rows.sort(key=lambda x: x[0])
         GLib.idle_add(self.show_results, rows, "Installed apps")
 
+    def show_new_updated(self):
+        self.busy_page("Checking for new and updated apps\u2026")
+        threading.Thread(target=self._new_updated_worker, daemon=True).start()
+
+    def _new_updated_worker(self):
+        res = run(["apk", "version", "-l", "<"], timeout=90)
+        rows = []
+        seen = set()
+        for line in res.stdout.splitlines():
+            line = line.strip()
+            if not line or line.lower().startswith("installed"):
+                continue
+            nv = line.split()[0]
+            name = pkgname(nv)
+            if name in seen or name.endswith(SKIP_SUFFIX):
+                continue
+            seen.add(name)
+            d = run(["apk", "info", "-d", name], timeout=10).stdout.splitlines()
+            summ = ""
+            if d and " " in d[0]:
+                summ = d[0].split(" ", 1)[1].rstrip(":")
+            rows.append((name, summ))
+            if len(rows) >= 120:
+                break
+        rows.sort(key=lambda x: x[0])
+        GLib.idle_add(self.show_results, rows, "New & Updated", True)
+
     def load(self, query, title):
         self.busy_page("Searching…")
         threading.Thread(target=lambda: GLib.idle_add(self.show_results, search_pkgs(query), title),
                          daemon=True).start()
 
-    def show_results(self, rows, title):
+    def show_results(self, rows, title, update=False):
         self.spinner.stop()
         for c in self.results.get_children():
             self.results.remove(c)
@@ -253,13 +275,13 @@ class Win(Gtk.ApplicationWindow):
             n.get_style_context().add_class("hint")
             self.results.pack_start(n, False, False, 0)
         for name, summ in rows:
-            self.results.pack_start(self.make_row(name, summ), False, False, 0)
+            self.results.pack_start(self.make_row(name, summ, update), False, False, 0)
         self.results.show_all()
         self.back.set_visible(True)
         self.stack.set_visible_child_name("results")
         return False
 
-    def make_row(self, name, summ):
+    def make_row(self, name, summ, update=False):
         row = Gtk.Box(spacing=12)
         row.get_style_context().add_class("row")
         img = Gtk.Image.new_from_icon_name(self.icon_for(name), Gtk.IconSize.DND)
@@ -278,15 +300,20 @@ class Win(Gtk.ApplicationWindow):
         open_btn = Gtk.Button(label="Details")
         open_btn.connect("clicked", lambda *_: self.open_detail(name))
         row.pack_start(txt, True, True, 0)
-        row.pack_start(self.action_button(name), False, False, 0)
+        row.pack_start(self.action_button(name, update), False, False, 0)
         row.pack_start(open_btn, False, False, 0)
         return row
 
-    def action_button(self, name):
+    def action_button(self, name, update=False):
+        if update:
+            b = Gtk.Button(label="Update")
+            b.get_style_context().add_class("install")
+            b.connect("clicked", self.on_action, name, "update")
+            return b
         installed = is_installed(name)
         b = Gtk.Button(label="Remove" if installed else "Install")
         b.get_style_context().add_class("remove" if installed else "install")
-        b.connect("clicked", self.on_action, name)
+        b.connect("clicked", self.on_action, name, "toggle")
         return b
 
     def open_detail(self, name):
@@ -334,20 +361,25 @@ class Win(Gtk.ApplicationWindow):
         res = run(["pkexec", "apk", verb, "-q", name], timeout=1800)
         GLib.idle_add(self._action_done, name, remove, button, res)
 
-    def _action_done(self, name, remove, button, res):
+    def _action_done(self, name, remove, mode, button, res):
         self.busy.discard(name)
         if res.returncode == 0:
-            self.toast_msg(("Removed " if remove else "Installed ") + name, 7)
+            done = "Updated " if mode == "update" else ("Removed " if remove else "Installed ")
+            self.toast_msg(done + name, 7)
         else:
             err = (res.stderr or "").lower()
             if "agent" in err or res.returncode == 127 or "authoriz" in err or "dismiss" in err:
+                verb = "add -u" if mode == "update" else ("del" if remove else "add")
                 self.toast_msg("Could not get permission. Open the Console and run: apk %s %s"
-                               % ("del" if remove else "add", name), 12)
+                               % (verb, name), 12)
             else:
                 tail = (res.stderr.strip().splitlines() or ["failed"])[-1]
                 self.toast_msg("Failed: " + tail[:80], 10)
-        now = is_installed(name)
         button.set_sensitive(True)
+        if mode == "update":
+            button.set_label("Updated" if res.returncode == 0 else "Update")
+            return False
+        now = is_installed(name)
         button.set_label("Remove" if now else "Install")
         ctx = button.get_style_context()
         ctx.remove_class("install")
