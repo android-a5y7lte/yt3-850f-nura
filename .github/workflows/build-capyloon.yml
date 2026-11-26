@@ -151,12 +151,17 @@ jobs:
       - name: Write armv7/musl mozconfig
         run: |
           set -eux
+          # Gecko hands clang the normalised triple (armv7-linux-musleabihf), which
+          # no longer matches Alpine's GCC directory, so name that directory.
+          GCCDIR=$(ls -d "$SYSROOT"/usr/lib/gcc/armv7-alpine-linux-musleabihf/* | tail -1)
+          test -f "$GCCDIR/crtbeginS.o"
           cat > gecko/mozconfig-b2g-yt3 <<EOF
           # mozconfig-b2g-mobian, retargeted: armv7 + musl, no LTO, no debug info.
           . \$topsrcdir/mozconfig-capyloon-env
           export TOOLCHAIN_PREFIX="llvm-"
-          export CC=clang
-          export CXX=clang++
+          export CC="clang --gcc-install-dir=${GCCDIR}"
+          export CXX="clang++ --gcc-install-dir=${GCCDIR}"
+          export BINDGEN_CFLAGS="--gcc-install-dir=${GCCDIR}"
           export HOST_CC=clang
           export HOST_CXX=clang++
           export RUSTFLAGS="-C target-feature=-crt-static"
