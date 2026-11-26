@@ -232,8 +232,14 @@ jobs:
           export MOZCONFIG="$PWD/mozconfig-b2g-yt3"
           export MOZBUILD_STATE_PATH="$HOME/.mozbuild"
           # Stop before the job limit so the compile cache below still gets saved.
-          timeout 285m ./mach build --keep-going 2>&1 | grep -vE '^ *[0-9:.]+ +(Compiling|Finished|Fresh) ' | tail -n 3000
-          rc=${PIPESTATUS[0]}
+          timeout 285m ./mach build --keep-going > ../build.log 2>&1
+          rc=$?
+          sed -i "s#$GITHUB_WORKSPACE/##g" ../build.log
+          wc -l ../build.log
+          echo "======== ERRORS (with context) ========"
+          grep -nE ' error: |error\[E[0-9]+\]|ld\.lld: error|could not compile|gmake\[[0-9]\]: \*\*\* \[' -A7 ../build.log | grep -v 'Waiting for unfinished' | cut -c1-400 | head -n 2500
+          echo "======== LAST 150 LINES ========"
+          tail -n 150 ../build.log | cut -c1-300
           sccache --show-stats | head -30 || true
           [ "$rc" = 124 ] && echo "BUILD TIMED OUT - rerun the workflow, the cache continues it"
           exit "$rc"
