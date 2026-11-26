@@ -111,6 +111,7 @@ class Win(Gtk.ApplicationWindow):
         bar.get_style_context().add_class("bar")
         self.back = Gtk.Button.new_from_icon_name("go-previous-symbolic", Gtk.IconSize.LARGE_TOOLBAR)
         self.back.connect("clicked", lambda *_: self.go_home())
+        self.back.set_no_show_all(True)
         self.entry = Gtk.SearchEntry()
         self.entry.set_placeholder_text("Search apps")
         self.entry.set_hexpand(True)
@@ -373,7 +374,9 @@ class App(Gtk.Application):
                                                   Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
     def do_activate(self):
-        (self.get_active_window() or Win(self)).present()
+        win = self.get_active_window() or Win(self)
+        win.show_all()
+        win.present()
 
 
 if __name__ == "__main__":
