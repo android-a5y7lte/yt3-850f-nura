@@ -142,7 +142,7 @@ jobs:
             gtk+3.0-dev glib-dev pango-dev cairo-dev gdk-pixbuf-dev at-spi2-core-dev \
             dbus-dev dbus-glib-dev fontconfig-dev freetype-dev \
             wayland-dev wayland-protocols libxkbcommon-dev mesa-dev libdrm-dev \
-            pulseaudio-dev alsa-lib-dev pipewire-dev libffi-dev zlib-dev
+            pulseaudio-dev alsa-lib-dev pipewire-dev libffi-dev zlib-dev pixman-dev
           sudo chown -R "$(id -u):$(id -g)" "$SYS"
           du -sh "$SYS"
           ls "$SYS/usr/lib/gcc/"*/ || true
@@ -190,6 +190,7 @@ jobs:
           ac_add_options --disable-debug-symbols
           ac_add_options --disable-crashreporter
           ac_add_options --disable-jemalloc
+          ac_add_options --enable-system-pixman
           ac_add_options --disable-profiling
           ac_add_options --without-wasm-sandboxed-libraries
           ac_add_options --enable-safebrowsing
@@ -237,8 +238,12 @@ jobs:
           set +e
           sed -i "s#$GITHUB_WORKSPACE/##g" ../build.log
           wc -l ../build.log
+          echo "======== FAILED TARGETS ========"
+          grep -E 'gmake\[[0-9]\]: \*\*\* \[' ../build.log | grep -v 'Waiting for unfinished' | sed -E 's/^ *[0-9:.]+ //' | sort -u | cut -c1-300 | head -n 200
+          echo "======== DISTINCT ERRORS ========"
+          grep -E ' error: |error\[E[0-9]+\]|ld\.lld: error|could not compile' ../build.log | grep -v '<instantiation>' | sed -E 's/^ *[0-9:.]+ //' | sort | uniq -c | sort -rn | cut -c1-400 | head -n 400
           echo "======== ERRORS (with context) ========"
-          grep -nE ' error: |error\[E[0-9]+\]|ld\.lld: error|could not compile|gmake\[[0-9]\]: \*\*\* \[' -A7 ../build.log | grep -v 'Waiting for unfinished' | cut -c1-400 | head -n 2500
+          grep -nE ' error: |error\[E[0-9]+\]|ld\.lld: error|could not compile' -A6 ../build.log | grep -v '<instantiation>' | cut -c1-400 | head -n 1200
           echo "======== LAST 150 LINES ========"
           tail -n 150 ../build.log | cut -c1-300
           sccache --show-stats | head -30 || true
