@@ -1,0 +1,194 @@
+name: Build Capyloon shell bundle (armv7/musl)
+
+# Second half of Capyloon for the YT3-850F. build-capyloon.yml produces the
+# Gecko b2g runtime; this builds what sits around it and bundles the lot:
+#   - api-daemon + appscmd (capyloon/api-daemon) and b2ghald + b2ghalctl
+#     (capyloon/b2ghald), cross-compiled for armv7 musl
+#   - the Nutria interface and its apps (homescreen, keyboard, settings, files,
+#     media centre, contacts, terminal, themes and wallpapers), packaged by
+#     Nutria's own "deb" command
+# The .deb is unpacked into a plain /opt/capyloon tree and released as a
+# tarball, because Nura is Alpine and has no dpkg. ipfsd (the IPFS node) is
+# left out: it is optional, heavy for 1 GB of RAM, and replaced by a no-op.
+
+on:
+  workflow_dispatch:
+    inputs:
+      b2g_tag:
+        description: "release tag holding the b2g tarball (empty = newest capyloon-b2g-armv7-*)"
+        default: ""
+        required: false
+      skip_b2g:
+        description: "true = build daemons only, no bundle (use before b2g exists)"
+        default: "false"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  RUST_TARGET: armv7-unknown-linux-musleabihf
+  RUST_VERSION: "1.76.0"
+  ALPINE_ARCH: armv7
+  ALPINE_BRANCH: v3.20
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host toolchain
+        run: |
+          set -eux
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang-17 lld-17 llvm-17 pkg-config curl xz-utils bzip2 dpkg protobuf-compiler
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+          rustup target add "$RUST_TARGET"
+
+      - name: Alpine armv7 (musl) sysroot and cross compiler wrappers
+        run: |
+          set -eux
+          SYS="$PWD/sysroot"; mkdir -p "$SYS"
+          CDN="https://dl-cdn.alpinelinux.org/alpine/${ALPINE_BRANCH}"
+          AST=$(curl -s "$CDN/main/x86_64/" | grep -oE 'apk-tools-static-[0-9][^"]*\.apk' | sort -V | tail -1)
+          curl -sSL "$CDN/main/x86_64/$AST" -o ast.apk
+          mkdir ast && tar -xzf ast.apk -C ast 2>/dev/null
+          sudo ast/sbin/apk.static --arch "$ALPINE_ARCH" -X "$CDN/main" -X "$CDN/community" -U --allow-untrusted \
+            --no-scripts --root "$SYS" --initdb add musl-dev gcc g++ linux-headers
+          sudo chown -R "$(id -u):$(id -g)" "$SYS"
+          GCCDIR=$(ls -d "$SYS"/usr/lib/gcc/armv7-alpine-linux-musleabihf/* | tail -1)
+          mkdir -p "$PWD/xbin"
+          for c in clang clang++; do
+            n=armv7-musl-$c
+            printf '#!/bin/sh\nexec /usr/bin/%s-17 --target=armv7-alpine-linux-musleabihf --sysroot=%s --gcc-install-dir=%s -mfpu=neon -fuse-ld=lld "$@"\n' "$c" "$SYS" "$GCCDIR" > "xbin/$n"
+            chmod +x "xbin/$n"
+          done
+          cat xbin/armv7-musl-clang
+          {
+            echo "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_MUSLEABIHF_LINKER=$PWD/xbin/armv7-musl-clang"
+            echo "CC_armv7_unknown_linux_musleabihf=$PWD/xbin/armv7-musl-clang"
+            echo "CXX_armv7_unknown_linux_musleabihf=$PWD/xbin/armv7-musl-clang++"
+            echo "AR_armv7_unknown_linux_musleabihf=/usr/bin/llvm-ar-17"
+            echo "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_MUSLEABIHF_RUSTFLAGS=-C target-feature=-crt-static"
+            echo "BINDGEN_EXTRA_CLANG_ARGS_armv7_unknown_linux_musleabihf=--sysroot=$SYS --gcc-install-dir=$GCCDIR"
+            echo "LIBCLANG_PATH=/usr/lib/llvm-17/lib"
+          } >> "$GITHUB_ENV"
+
+      - name: Build api-daemon and appscmd
+        run: |
+          set -ux
+          git clone -q --depth 1 https://github.com/capyloon/api-daemon
+          cd api-daemon
+          git log -1 --format='%h %cd' --date=short
+          rc=0
+          (cd daemon && cargo build --release --target "$RUST_TARGET") > ../api-daemon.log 2>&1 || rc=$?
+          if [ "$rc" = 0 ]; then
+            (cd services/apps/appscmd && cargo build --release --target "$RUST_TARGET") >> ../api-daemon.log 2>&1 || rc=$?
+          fi
+          set +e
+          echo "======== DISTINCT ERRORS ========"
+          grep -E '^error|error: |could not compile' ../api-daemon.log | sort | uniq -c | sort -rn | cut -c1-400 | head -n 100
+          echo "======== ERRORS (with context) ========"
+          grep -nE '^error|could not compile' -A14 ../api-daemon.log | cut -c1-400 | head -n 600
+          echo "======== LAST 60 LINES ========"
+          tail -n 60 ../api-daemon.log | cut -c1-300
+          ls -la "target/$RUST_TARGET/release/" | head -30
+          exit "$rc"
+
+      - name: Build b2ghald and b2ghalctl
+        run: |
+          set -ux
+          git clone -q --depth 1 https://github.com/capyloon/b2ghald
+          cd b2ghald
+          rc=0
+          cargo build --release --target "$RUST_TARGET" > ../b2ghald.log 2>&1 || rc=$?
+          set +e
+          grep -nE '^error|could not compile' -A14 ../b2ghald.log | cut -c1-400 | head -n 300
+          tail -n 30 ../b2ghald.log | cut -c1-300
+          ls -la "target/$RUST_TARGET/release/" | head -20
+          exit "$rc"
+
+      - name: Collect daemons
+        run: |
+          set -eux
+          mkdir -p out daemons
+          cp api-daemon/target/$RUST_TARGET/release/api-daemon api-daemon/target/$RUST_TARGET/release/appscmd daemons/
+          cp b2ghald/target/$RUST_TARGET/release/b2ghald b2ghald/target/$RUST_TARGET/release/b2ghalctl daemons/
+          llvm-strip-17 daemons/*
+          file daemons/*
+          llvm-readelf-17 -d daemons/api-daemon | grep -E 'NEEDED|interp' || true
+          tar -C daemons -cJf out/capyloon-daemons-armv7-musl.tar.xz .
+          ls -la daemons out
+
+      - name: Fetch the b2g runtime release
+        if: ${{ github.event.inputs.skip_b2g != 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eux
+          TAG="${{ github.event.inputs.b2g_tag }}"
+          if [ -z "$TAG" ]; then
+            TAG=$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq '[.[] | select(.tag_name | startswith("capyloon-b2g-armv7-"))][0].tag_name')
+          fi
+          echo "b2g release: $TAG"
+          mkdir b2gpkg
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D b2gpkg -p 'b2g-*'
+          ls -la b2gpkg
+          echo "B2G_PKG=$(ls $PWD/b2gpkg/b2g-* | head -1)" >> "$GITHUB_ENV"
+
+      - name: Package Nutria (interface + apps) around it
+        if: ${{ github.event.inputs.skip_b2g != 'true' }}
+        run: |
+          set -eux
+          git clone -q --depth 1 https://github.com/capyloon/nutria
+          cd nutria
+          git log -1 --format='%h %cd' --date=short
+          # Nutria unpacks the runtime with "tar xf"; hand it a .tar.bz2 as upstream does.
+          PKG="$B2G_PKG"
+          case "$PKG" in
+            *.tar.xz) xz -dc "$PKG" | bzip2 -1 > "$PWD/b2g-123.0.en-US.linux-armv7.tar.bz2"; PKG="$PWD/b2g-123.0.en-US.linux-armv7.tar.bz2" ;;
+          esac
+          printf '#!/bin/sh\n# ipfsd is not shipped on this tablet.\nexec sleep infinity\n' > "$PWD/ipfsd-stub"
+          chmod +x "$PWD/ipfsd-stub"
+          export NUTRIA_B2G_PACKAGE="$PKG"
+          export NUTRIA_API_DAEMON_BINARY="$GITHUB_WORKSPACE/daemons/api-daemon"
+          export NUTRIA_APPSCMD_BINARY="$GITHUB_WORKSPACE/daemons/appscmd"
+          export NUTRIA_B2GHALD_BINARY="$GITHUB_WORKSPACE/daemons/b2ghald"
+          export NUTRIA_B2GHALCTL_BINARY="$GITHUB_WORKSPACE/daemons/b2ghalctl"
+          export NUTRIA_IPFSD_BINARY="$PWD/ipfsd-stub"
+          export NUTRIA_API_DAEMON_PORT=8081
+          rc=0
+          ./jackady deb --device pinephone > ../nutria.log 2>&1 || rc=$?
+          set +e
+          tail -n 120 ../nutria.log | cut -c1-300
+          ls -la builder/output/debian/ 2>/dev/null
+          [ "$rc" = 0 ] || exit "$rc"
+          set -e
+          DEB=$(ls builder/output/debian/*.deb | head -1)
+          mkdir ../tree
+          dpkg-deb -x "$DEB" ../tree
+          dpkg-deb -e "$DEB" ../tree/DEBIAN
+          cd ../tree
+          find . -maxdepth 3 | head -80
+          du -sh opt/capyloon opt/capyloon/* | sort -h | tail -20
+          ls opt/capyloon/webapps | head -60
+          file opt/capyloon/b2g/b2g opt/capyloon/api-daemon/api-daemon
+          tar -cJf ../out/capyloon-yt3-armv7-musl.tar.xz opt usr
+          ls -la ../out
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eux
+          sha256sum out/* | tee out/SHA256SUMS.txt
+          if [ -f out/capyloon-yt3-armv7-musl.tar.xz ]; then
+            TAG="capyloon-yt3-$(date +%Y%m%d-%H%M)"; T="Capyloon for the YT3-850F (b2g + daemons + Nutria apps)"
+          else
+            TAG="capyloon-daemons-$(date +%Y%m%d-%H%M)"; T="Capyloon daemons only (armv7/musl)"
+          fi
+          gh release create "$TAG" out/* --title "$T $(date +%Y-%m-%d)" \
+            --notes "Experimental. Unpacks to /opt/capyloon on Nura; started by mods/capyloon/yt3-capyloon as a second session next to Phosh."
