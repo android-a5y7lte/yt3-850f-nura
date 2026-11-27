@@ -28,7 +28,10 @@ while [ ! -S /tmp/api-daemon-socket ] && [ $n -lt 40 ]; do sleep 1; n=$((n+1)); 
 [ -S /tmp/api-daemon-socket ] || echo "api-daemon socket did not appear after ${n}s (see /tmp/capyloon_api-daemon.log)"
 
 echo "starting b2g"
-/opt/capyloon/b2g/b2g $B2G_ARGS -profile "$C/profile/" > /tmp/capyloon_gecko.log 2>&1
+# libxul loads its siblings (libmozsqlite3, libgkcodecs, ...) from this dir.
+export LD_LIBRARY_PATH="/opt/capyloon/b2g${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+cd /opt/capyloon/b2g
+./b2g $B2G_ARGS -profile "$C/profile/" > /tmp/capyloon_gecko.log 2>&1
 echo "b2g exited with $?"
 kill "$DAEMON" 2>/dev/null
 swaymsg exit
