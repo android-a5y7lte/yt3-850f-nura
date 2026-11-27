@@ -13,6 +13,7 @@ cp /opt/capyloon/b2g/defaults/pref/user.js "$C/profile/user.js"
 cat >> "$C/profile/user.js" <<'PREFS'
 user_pref("gfx.webrender.software", true);
 user_pref("layers.acceleration.disabled", true);
+user_pref("layout.css.devPixelsPerPx", "1.5");
 PREFS
 sed -e "s#__HOME__#$HOME#g" /opt/capyloon/api-daemon/config.toml > "$C/api-daemon-config.toml"
 
